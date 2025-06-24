@@ -1,0 +1,2386 @@
+--- ReadMe.md ---
+# Paramigo Project Summary & State
+
+**Date:** June 23, 2025
+**Project ID:** `paramigo-tool-03`
+**Status:** The core application and the final quiz feature are fully functional. The primary learning loop (Library -> Lesson -> Quiz -> Results -> Smart Focus) is complete, and a cumulative testing mechanism with history is now in place. The application is robust and ready for production preparation or new feature development.
+
+## 1. Project Overview
+
+**Paramigo** is a personalized, adaptive learning tool designed to train new financial advisors. It transforms a library of existing training content (from Google Docs) into an interactive, persistent learning experience.
+
+The core user experience is a web application where an advisor can:
+
+1.  Log in securely with their Google account.
+2.  Choose a learning style during a one-time onboarding, which can be changed later.
+3.  Browse a library of training topics and a history of past final quizzes.
+4.  Select a topic to view its history or start a new lesson attempt.
+5.  Take an AI-generated lesson tailored to their learning style.
+6.  Complete a quiz and review their score, question-by-question explanations, and the original lesson content.
+7.  If they struggled on a lesson, they are offered a "Smart Focus" opportunity to generate a new, consolidated lesson covering their weak points.
+8.  Create, take, and review **Final Cumulative Quizzes** that test knowledge across multiple topics. These final quizzes also have their own persistent history and can be retaken.
+9.  All lesson attempts (regular, focused, and final) are saved to the user's history.
+10. An "Ask Tutor" feature is available for specific questions during lessons and reviews.
+
+## 2. Architecture
+
+The application uses a client-server architecture with a clear separation of concerns:
+
+- **Frontend (Client-Side):** A single-page application (SPA) experience built with vanilla HTML, CSS, and modern JavaScript (`type="module"`). It manages all UI views dynamically without full page reloads. It is served by the Flask backend but handles all Firebase Authentication on the client side.
+- **Backend (Server-Side):** A Python application built with the **Flask** web framework, acting as an API server. It provides data endpoints that the frontend calls to get information or trigger actions. Key responsibilities include:
+  - Serving the main `index.html` shell and `onboarding.html` page.
+  - Providing API endpoints like `/get_library_and_history`, `/submit_quiz`, `/generate_final_quiz`, and `/submit_final_quiz`.
+  - Communicating securely with Google Cloud services (Firestore and Google AI).
+- **Database:** **Google Cloud Firestore** in Native Mode acts as our primary database. It is structured into collections:
+  - `ContentMaster`: Stores the structured, parsed content from all Google Docs lessons. This is our single source of truth for all training material.
+  - `Users`: Stores a profile for each authenticated user, keyed by their Firebase UID. Each user document contains two subcollections:
+    - `lesson_attempts`: Stores a permanent record of every single-topic lesson they take (regular and Smart Focus).
+    - `final_quiz_attempts`: Stores a permanent record of every cumulative final quiz they take.
+
+## 3. Tech Stack
+
+- **Backend Language:** Python 3
+- **Web Framework:** Flask
+- **Frontend Languages:** HTML5, CSS3, JavaScript (ESM)
+- **Database:** Google Cloud Firestore (NoSQL)
+- **Authentication:** Firebase Authentication
+- **AI / Generative Models:** Google AI Platform (Gemini 1.5 Flash via `google-generativeai`)
+- **Cloud Platform:** Google Cloud Platform (GCP) & Firebase
+- **Key Python Libraries:** `flask`, `google-cloud-firestore`, `google-generativeai`, `python-dotenv`
+- **Key Frontend Libraries:** `firebase-app.js`, `firebase-auth.js` (v10 Modular SDK)
+
+## 4. Features Implemented So Far
+
+- **Automated Content Pipeline:** A `parser.py` script connects to Google Drive, parses linked Google Docs, and uploads structured content to the `ContentMaster` collection in Firestore.
+- **User Authentication & Onboarding:** Robust "Sign in with Google" via Firebase. New users are directed to a one-time onboarding page to select a learning style.
+- **Structured Learning Flow:** The main page shows a library of all topics. Clicking a topic opens a "detail" view showing its specific history and an option to start a new attempt.
+- **Intelligent "Smart Focus" Generation:** After a regular quiz, the system identifies missed concepts and uses the AI to generate a holistic summary and a button to create a new, consolidated lesson on those weak points.
+- **Quiz and History Management:**
+  - **Retake Quiz:** Users can retake any regular or final quiz. This creates a new attempt using the exact same questions as the original but shuffles the question order.
+  - **Delete Attempt:** Users can permanently delete any past _regular lesson_ attempt from their history.
+- **AI Tutor:** A floating chat window allows users to ask questions about the current lesson content.
+- **Final Cumulative Quizzes (Stateful):**
+  - **Topic Selection:** A modal allows users to select multiple topics for a cumulative quiz, with a "Select All / Deselect All" option for convenience.
+  - **AI Generation:** A dedicated backend endpoint (`/generate_final_quiz`) fetches content for all selected topics and uses the AI to generate a unique, consolidated quiz.
+  - **Persistent History:** Each final quiz attempt is saved to a dedicated `final_quiz_attempts` collection in Firestore, appearing in a "Final Quiz History" section on the main library page.
+  - **Review & Retake:** Users can review past final quiz results and retake any final quiz, just like a regular lesson.
+
+## 5. Outstanding Tasks or Next Steps
+
+The core application is functionally complete and refined. The logical next steps would focus on production readiness or adding major new features.
+
+- **Production Deployment:** Configure the application to run on a production-grade WSGI server (like Gunicorn) and host it on a service like Google App Engine or Cloud Run.
+- **UI/UX Refinement:** Further polish the CSS, improve loading states, and potentially add more engaging animations or transitions between views.
+- **Enhanced User Dashboard:** The "Topic Detail" view could be expanded into a full dashboard showing metrics like overall score average, most challenging topics, and progress over time.
+- **Content Versioning:** Implement a feature where users are notified if a lesson they completed has been updated in the `ContentMaster` library.
+
+## 6. Important Design Decisions
+
+- **Stateful Backend / Generate-and-Store Model:** We deliberately chose to store every lesson attempt and final quiz in the database. This enables a rich, persistent user history at the cost of increased database storage.
+- **Client-Side View Management:** The frontend acts as a Single-Page Application (SPA), providing a faster, more fluid user experience.
+- **Integrated History:** We decided to associate "Smart Focus" lessons with the parent topic's ID to keep the history organized. Final quizzes have their own separate history list on the main page.
+- **Frontend Resilience (The Radio Button Fix):** We implemented a `normalizeOptions()` helper function in the frontend JavaScript. This function defensively checks if the quiz options received from the AI are a string instead of an array, and if so, it intelligently parses the string into a proper array. This makes the UI resilient to malformed AI responses and prevents rendering bugs.
+- **Stateful Final Quizzes:** We made a key decision to make the Final Quiz feature stateful, giving it its own history, review, and retake capabilities, which mirrors the functionality of regular lessons and makes the feature much more useful.
+
+## 7. Assumptions or Constraints
+
+- **Assumption:** The source Google Docs will maintain a consistent structure that the `parser.py` script can rely on.
+- **Constraint:** The application is currently configured for local development and has not been hardened or optimized for a production environment.
+- **Constraint:** The AI model (Gemini 1.5 Flash) is fast and cost-effective but may occasionally produce malformed JSON. Our `normalizeOptions()` frontend function and `_normalise_ai_json()` backend function are designed to mitigate these issues.
+
+## 8. Naming Conventions and Folder Structure
+
+The project is organized in a standard Flask structure:
+
+```
+paramigo/
+├── static/
+│   └── style.css         # All CSS styles
+├── templates/
+│   ├── index.html        # The single HTML shell for the entire app
+│   └── onboarding.html   # The learning style selection page
+├── .env                  # Stores secret keys (e.g., GOOGLE_API_KEY)
+├── app.py                # Main Flask web server and all API endpoints
+└── ...                   (other files like parser.py, client_secret.json, etc.)
+```
+
+- **API Routes:** Backend routes are prefixed with `/` and follow a clear verb-noun structure (e.g., `/get_library_and_history`, `/generate_final_quiz`).
+- **CSS/JS:** All CSS is in `static/style.css`. All JavaScript is contained within a single `<script type="module">` block in `index.html`.
+
+## 9. Anything Else Important to Carry Forward
+
+The most critical lesson learned during development has been the need for a resilient frontend that does not blindly trust the structure of API responses, especially from a generative AI.
+
+- The implementation of the `normalizeOptions()` function is a prime example of this lesson and a pattern we should remember. It defensively checks and cleans incoming data at the point of rendering, preventing UI bugs.
+- Debugging by printing the raw AI response in the backend terminal remains the most effective strategy for solving generation issues.
+
+## 10. My preferred working style and rules to remember about how I like to work together
+
+- **DO NOT LIE. DO NOT OMIT CODE.** This is the most important rule. You must provide the complete, top-to-bottom code for every file you are asked to produce. Do not use placeholders, summaries, or comments like "Omitted for brevity." This is a critical matter of trust and functionality.
+- **Be Honest About Mistakes:** If I ask if you omitted something, be truthful. It is better to admit a mistake and fix it than to deny it.
+- **Structure and Clarity:** I prefer a step-by-step, methodical approach. The "Plan -> Action -> What to Do Next" format works well.
+- **Complete Files:** When providing code, always provide the entire file content, not just the changed snippets. This prevents copy-paste errors and ensures we are always working from a complete and correct baseline.
+- **Acknowledge the User's Frustration:** When a bug is persistent or a mistake is repeated, it's important to acknowledge the user's frustration and the severity of the issue before moving on to the solution.
+
+
+--- app.py ---
+# FILE: app.py
+
+import os, json, re
+from flask import Flask, render_template, jsonify, request
+from google.cloud import firestore
+from dotenv import load_dotenv
+import google.generativeai as genai
+
+# ── CONFIG ───────────────────────────────────────────────────────────────────────
+load_dotenv()
+genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
+db  = firestore.Client()
+app = Flask(__name__)
+
+# ── HELPERS ──────────────────────────────────────────────────────────────────────
+_FENCE_RE = re.compile(r"```(?:json)?|```", re.I)
+def _strip_fences(text: str) -> str: return _FENCE_RE.sub("", text).strip()
+def _normalise_ai_json(obj: dict) -> dict:
+    questions = obj.get("quiz_questions") or obj.get("quizQuestions") or []
+    if not isinstance(questions, list):
+        questions = []
+    return {"lesson_html": obj.get("lesson_html") or obj.get("lessonHtml") or "","quiz_questions": questions}
+
+# ── PAGES ────────────────────────────────────────────────────────────────────────
+@app.route("/")
+def home(): return render_template("index.html")
+
+@app.route("/onboarding")
+def onboarding():
+    styles = [
+        {"style_name": "The Mentor", "explanation": "Imagine you have a friendly, experienced guide. This style uses analogies and stories to explain concepts, focusing on the 'why' behind the advice. It's encouraging and patient."},
+        {"style_name": "The Analyst", "explanation": "This style is for the data-driven learner. It presents information with a focus on numbers, charts, and logical steps. It's precise, structured, and prioritizes factual accuracy."},
+        {"style_name": "The Strategist", "explanation": "This style thinks about the big picture and long-term goals. It frames advice in the context of a client's overall financial plan and future objectives. It's forward-looking and outcome-oriented."}
+    ]
+    return render_template("onboarding.html", styles=styles)
+
+# ── API: DATA LOADING ────────────────────────────────────────────────────────────
+@app.route("/get_library_and_history", methods=["POST"])
+def get_library_and_history():
+    data = request.get_json()
+    user_id = data.get("user_id")
+    if not user_id: return jsonify({"error": "User ID is required."}), 400
+    
+    # Fetch lesson attempt history
+    lesson_history_docs = db.collection("Users").document(user_id).collection("lesson_attempts").order_by("started_at", direction=firestore.Query.DESCENDING).stream()
+    history_by_lesson = {}
+    for doc in lesson_history_docs:
+        d = doc.to_dict()
+        lesson_id = d.get("lesson_id")
+        if lesson_id not in history_by_lesson:
+            history_by_lesson[lesson_id] = []
+        history_by_lesson[lesson_id].append({"attempt_id": doc.id, "title": d.get("title"), "score": d.get("score"), "questions_total": d.get("questions_total"), "started_at": d.get("started_at").isoformat()})
+    
+    # Fetch the main library content
+    library_docs = db.collection("ContentMaster").stream()
+    library_with_history = []
+    for doc in library_docs:
+        doc_dict = doc.to_dict()
+        title = doc_dict.get("title")
+        if title:
+            lesson_id = doc.id
+            library_with_history.append({"id": lesson_id, "title": title, "attempts": history_by_lesson.get(lesson_id, [])})
+
+    # NEW: Fetch final quiz history
+    final_quiz_history = []
+    final_quiz_docs = db.collection("Users").document(user_id).collection("final_quiz_attempts").order_by("started_at", direction=firestore.Query.DESCENDING).stream()
+    for doc in final_quiz_docs:
+        d = doc.to_dict()
+        final_quiz_history.append({
+            "attempt_id": doc.id,
+            "title": d.get("title"),
+            "score": d.get("score"),
+            "questions_total": d.get("questions_total"),
+            "started_at": d.get("started_at").isoformat()
+        })
+
+    return jsonify({"library": library_with_history, "final_quiz_history": final_quiz_history})
+
+@app.route("/get_lesson_attempt", methods=["POST"])
+def get_lesson_attempt():
+    data = request.get_json()
+    user_id, attempt_id = data.get("user_id"), data.get("attempt_id")
+    try:
+        attempt_ref = db.collection("Users").document(user_id).collection("lesson_attempts").document(attempt_id)
+        attempt_doc = attempt_ref.get()
+        if not attempt_doc.exists: return jsonify({"error": "Attempt not found."}), 404
+        d = attempt_doc.to_dict()
+        
+        default_focus = {"smart_focus_needed": False, "missed_concepts": [], "explanation": ""}
+        smart_focus_data = d.get("smart_focus", default_focus)
+
+        results_package = {
+            "lesson_id": d.get("lesson_id"),
+            "content": d.get("lesson_content"),
+            "user_answers": d.get("user_answers"),
+            "score": d.get("score"),
+            "questions_total": d.get("questions_total"),
+            "smart_focus": smart_focus_data
+        }
+        return jsonify(results_package)
+    except Exception as e:
+        print(f"[get_lesson_attempt] Firestore error: {e}")
+        return jsonify({"error": "Could not retrieve lesson history."}), 500
+
+# ── USER/PROFILE API ─────────────────────────────────────────────────────────────
+@app.route("/create_user", methods=["POST"])
+def create_user():
+    data = request.get_json()
+    uid = data.get("uid")
+    if not uid: return jsonify({"status": "error", "message": "User ID required."}), 400
+    doc_ref = db.collection("Users").document(uid)
+    if not doc_ref.get().exists:
+        doc_ref.set({"displayName" : data.get("displayName"),"email" : data.get("email"),"created_at"  : firestore.SERVER_TIMESTAMP,"learningStyle": None})
+        return jsonify({"status": "success", "is_new_user": True, "needs_onboarding": True})
+    user_data = doc_ref.get().to_dict()
+    needs_onboarding = "learningStyle" not in user_data or user_data.get("learningStyle") is None
+    return jsonify({"status": "success", "is_new_user": False, "needs_onboarding": needs_onboarding})
+
+@app.route("/save_preference", methods=["POST"])
+def save_preference():
+    data = request.get_json()
+    uid, style = data.get("uid"), data.get("style")
+    if not uid or not style: return jsonify({"status": "error", "message": "UID and style are required."}), 400
+    try:
+        db.collection("Users").document(uid).update({"learningStyle": style})
+        return jsonify({"status": "success"})
+    except Exception as e:
+        print(f"[save_preference] Firestore error: {e}")
+        return jsonify({"status": "error", "message": "Could not save preference."}), 500
+
+# ── API: THE NEW LEARNING FLOW ───────────────────────────────────────────────────
+@app.route("/start_lesson", methods=["POST"])
+def start_lesson():
+    data = request.get_json()
+    user_id, lesson_id = data.get("user_id"), data.get("lesson_id")
+    original_attempt_id = data.get("original_attempt_id")
+
+    try:
+        user_doc = db.collection("Users").document(user_id).get()
+        learning_style = user_doc.to_dict().get("learningStyle") or "The Mentor"
+    except Exception: learning_style = "The Mentor"
+
+    lesson_content = None
+    source_title = ""
+
+    if original_attempt_id:
+        original_attempt_doc = db.collection("Users").document(user_id).collection("lesson_attempts").document(original_attempt_id).get()
+        if original_attempt_doc.exists:
+            lesson_content = original_attempt_doc.to_dict().get("lesson_content")
+            source_title = original_attempt_doc.to_dict().get("title")
+        else:
+            return jsonify({"error": "Original attempt not found for retake."}), 404
+    else:
+        source_doc_ref = db.collection("ContentMaster").document(lesson_id)
+        source_doc = source_doc_ref.get()
+        if not source_doc.exists: return jsonify({"error": "Lesson not found."}), 404
+        source_content = source_doc.to_dict()
+        source_title = source_content.get("title")
+        prompt = f'You are an expert financial trainer. Teach in the "{learning_style}" voice. **OUTPUT REQUIREMENTS (pure JSON):** {{"lesson_html": "<string - raw HTML>", "quiz_questions": [{{ "question": "<string>", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "explanation": "<string>" }}]}} # SOURCE MATERIAL: {json.dumps(source_content, ensure_ascii=False)}'
+        try:
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            raw_json = model.generate_content(prompt).text
+            lesson_content = _normalise_ai_json(json.loads(_strip_fences(raw_json)))
+        except Exception as e:
+            print(f"[start_lesson] AI or JSON error: {e}")
+            return jsonify({"error": "Lesson generation failed."}), 500
+
+    if not lesson_content: return jsonify({"error": "Failed to get or generate lesson content."}), 500
+
+    try:
+        attempt_ref = db.collection("Users").document(user_id).collection("lesson_attempts").document()
+        attempt_ref.set({ "lesson_id": lesson_id, "title": source_title, "learning_style": learning_style, "started_at": firestore.SERVER_TIMESTAMP, "status": "in-progress", "lesson_content": lesson_content, "user_answers": {}, "score": None, "questions_total": len(lesson_content.get("quiz_questions", [])) })
+        return jsonify({"attempt_id": attempt_ref.id, "content": lesson_content, "lesson_id": lesson_id})
+    except Exception as e:
+        print(f"[start_lesson] Firestore error: {e}")
+        return jsonify({"error": "Could not save new lesson attempt."}), 500
+
+@app.route("/submit_quiz", methods=["POST"])
+def submit_quiz():
+    data = request.get_json()
+    user_id, attempt_id, user_answers, lesson_id = data.get("user_id"), data.get("attempt_id"), data.get("user_answers"), data.get("lesson_id")
+    attempt_ref = db.collection("Users").document(user_id).collection("lesson_attempts").document(attempt_id)
+    attempt_doc = attempt_ref.get()
+    if not attempt_doc.exists: return jsonify({"error": "Lesson attempt not found."}), 404
+    
+    lesson_content = attempt_doc.to_dict().get("lesson_content", {})
+    quiz_questions = lesson_content.get("quiz_questions", [])
+    
+    score = 0
+    missed_concepts = []
+    for i, q in enumerate(quiz_questions):
+        user_answer_index = user_answers.get(str(i))
+        correct_answer_index = q.get("correct_answer_index")
+        if user_answer_index is not None and int(user_answer_index) == correct_answer_index:
+            score += 1
+        else:
+            missed_concepts.append(q.get("question"))
+
+    smart_focus_data = {'smart_focus_needed': False, 'missed_concepts': [], 'explanation': ''}
+    if missed_concepts:
+        learning_style = attempt_doc.to_dict().get("learning_style", "The Mentor")
+        sf_prompt = f'A user has completed a quiz and struggled with the concepts underlying the following questions: {json.dumps(missed_concepts)} Your task is to provide a single, cohesive "quick refresher" summary (as plain text, <200 words). This summary should explain the foundational principles or themes that connect these missed concepts. The user\'s learning style is "{learning_style}". Return ONLY the plain text explanation, no markdown.'
+
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            explanation = model.generate_content(sf_prompt).text.strip()
+            smart_focus_data = {
+                'smart_focus_needed': True,
+                'missed_concepts': missed_concepts,
+                'explanation': explanation
+            }
+        except Exception as e:
+            print(f"[smart_focus] AI error: {e}")
+
+    attempt_ref.update({ "status": "completed", "user_answers": user_answers, "score": score, "completed_at": firestore.SERVER_TIMESTAMP, "smart_focus": smart_focus_data })
+    
+    return jsonify({"lesson_id": lesson_id, "content": lesson_content, "user_answers": user_answers, "score": score, "questions_total": len(quiz_questions), "smart_focus": smart_focus_data})
+
+@app.route("/start_multi_concept_lesson", methods=["POST"])
+def start_multi_concept_lesson():
+    data = request.get_json()
+    user_id, concepts, parent_lesson_id = data.get("user_id"), data.get("concepts"), data.get("parent_lesson_id")
+    if not all([user_id, concepts, parent_lesson_id]):
+        return jsonify({"error": "User ID, a list of concepts, and parent lesson ID are required."}), 400
+
+    try:
+        user_doc = db.collection("Users").document(user_id).get()
+        learning_style = user_doc.to_dict().get("learningStyle") or "The Mentor"
+    except Exception: learning_style = "The Mentor"
+    
+    title = f"Focused Lesson on Key Concepts"
+    prompt = f"""
+    You are an expert financial trainer. Your task is to create a single, cohesive, foundational micro-lesson that addresses all the concepts a user struggled with.
+    The user's learning style is "{learning_style}".
+    The user struggled with the concepts underlying these questions:
+    {json.dumps(concepts)}
+
+    Instead of teaching to each question one-by-one, synthesize the underlying principles into a single lesson. Teach the "why" behind these concepts to build a stronger foundation.
+
+    **OUTPUT REQUIREMENTS (pure JSON):**
+    {{
+      "lesson_html": "<string - A detailed HTML explanation of the foundational concepts, as if it were a full lesson. Use tags like <h2>, <p>, <ul> etc.>",
+      "quiz_questions": [
+        {{ "question": "<A question that tests the synthesized foundational knowledge>", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "explanation": "<Detailed explanation for this specific question>" }},
+        {{ "question": "<A second, different question testing the core principles>", "options": ["A", "B", "C", "D"], "correct_answer_index": 1, "explanation": "<Detailed explanation for this specific question>" }}
+      ]
+    }}
+    """
+    
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        raw_json = model.generate_content(prompt).text
+        lesson_content = _normalise_ai_json(json.loads(_strip_fences(raw_json)))
+    except Exception as e:
+        print(f"[start_multi_concept_lesson] AI or JSON error: {e}")
+        return jsonify({"error": "Focused lesson generation failed."}), 500
+
+    try:
+        attempt_ref = db.collection("Users").document(user_id).collection("lesson_attempts").document()
+        attempt_ref.set({
+            "lesson_id": parent_lesson_id, 
+            "title": title, 
+            "learning_style": learning_style,
+            "started_at": firestore.SERVER_TIMESTAMP, 
+            "status": "in-progress",
+            "lesson_content": lesson_content, 
+            "user_answers": {}, 
+            "score": None,
+            "questions_total": len(lesson_content.get("quiz_questions", []))
+        })
+        return jsonify({"attempt_id": attempt_ref.id, "content": lesson_content, "lesson_id": parent_lesson_id})
+    except Exception as e:
+        print(f"[start_multi_concept_lesson] Firestore error: {e}")
+        return jsonify({"error": "Could not save focused lesson."}), 500
+
+@app.route("/delete_attempt", methods=["POST"])
+def delete_attempt():
+    data = request.get_json()
+    user_id, attempt_id = data.get("user_id"), data.get("attempt_id")
+    if not user_id or not attempt_id: return jsonify({"status": "error", "message": "User and attempt ID are required."}), 400
+    try:
+        db.collection("Users").document(user_id).collection("lesson_attempts").document(attempt_id).delete()
+        return jsonify({"status": "success"})
+    except Exception as e:
+        print(f"[delete_attempt] Firestore error: {e}")
+        return jsonify({"status": "error", "message": "Could not delete attempt."}), 500
+
+@app.route("/ask_tutor", methods=["POST"])
+def ask_tutor():
+    data = request.get_json()
+    question, context = data.get("question"), data.get("context")
+    if not question or not context: return jsonify({"error": "A question and lesson context are required."}), 400
+    prompt = f"You are a helpful AI Tutor for financial advisors. Answer the user's question based *only* on the provided lesson context. If the question cannot be answered from the context, politely state that you can only answer questions directly related to the current lesson material.\n\n# LESSON CONTEXT:\n{context}\n\n# USER'S QUESTION:\n{question}"
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        answer = model.generate_content(prompt).text.strip()
+        return jsonify({"answer": answer})
+    except Exception as e:
+        print(f"[ask_tutor] AI generation error: {e}")
+        return jsonify({"error": "Sorry, I had a problem generating an answer."}), 500
+
+# ── API: FINAL CUMULATIVE QUIZ (STATEFUL) ────────────────────────────────────────
+@app.route("/generate_final_quiz", methods=["POST"])
+def generate_final_quiz():
+    data = request.get_json()
+    user_id, topic_ids, question_count = data.get("user_id"), data.get("topic_ids"), data.get("question_count")
+    if not all([user_id, topic_ids, question_count]): return jsonify({"error": "User ID, Topic IDs, and question count are required."}), 400
+
+    all_content = []
+    topic_titles = []
+    try:
+        for topic_id in topic_ids:
+            doc = db.collection("ContentMaster").document(topic_id).get()
+            if doc.exists:
+                doc_dict = doc.to_dict()
+                all_content.append(doc_dict)
+                topic_titles.append(doc_dict.get("title", "Unknown Topic"))
+    except Exception as e:
+        print(f"[generate_final_quiz] Firestore error: {e}")
+        return jsonify({"error": "Could not retrieve source content."}), 500
+    if not all_content: return jsonify({"error": "No content found for the selected topics."}), 404
+
+    prompt = f"""
+    You are an expert financial training examiner. Your task is to create a cumulative final quiz.
+    Generate exactly {question_count} unique and challenging quiz questions based on the combined source material provided below.
+    The questions should synthesize information across the different topics where possible. Do not simply copy questions from the source.
+    **OUTPUT REQUIREMENTS (pure JSON):** {{"quiz_questions": [{{ "question": "<string>", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "explanation": "<string>" }}]}}
+    # COMBINED SOURCE MATERIAL: {json.dumps(all_content, ensure_ascii=False)}
+    """
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        raw_json = model.generate_content(prompt).text
+        quiz_data = json.loads(_strip_fences(raw_json))
+        final_questions = quiz_data.get("quiz_questions", [])
+        if not final_questions: raise ValueError("AI did not return any questions.")
+    except Exception as e:
+        print(f"[generate_final_quiz] AI or JSON error: {e}")
+        return jsonify({"error": "Final quiz generation failed."}), 500
+
+    title = f"Final Quiz on {len(topic_titles)} Topics" if len(topic_titles) > 1 else f"Final Quiz: {topic_titles[0]}"
+    try:
+        attempt_ref = db.collection("Users").document(user_id).collection("final_quiz_attempts").document()
+        attempt_ref.set({
+            "title": title,
+            "topic_ids": topic_ids,
+            "quiz_questions": final_questions,
+            "questions_total": len(final_questions),
+            "started_at": firestore.SERVER_TIMESTAMP,
+            "status": "in-progress",
+            "score": None,
+            "user_answers": {}
+        })
+        return jsonify({"attempt_id": attempt_ref.id, "quiz_questions": final_questions})
+    except Exception as e:
+        print(f"[generate_final_quiz] Firestore save error: {e}")
+        return jsonify({"error": "Could not save the new final quiz."}), 500
+
+@app.route("/submit_final_quiz", methods=["POST"])
+def submit_final_quiz():
+    data = request.get_json()
+    user_id, attempt_id, user_answers = data.get("user_id"), data.get("attempt_id"), data.get("user_answers")
+    if not all([user_id, attempt_id, user_answers]): return jsonify({"error": "User ID, Attempt ID, and answers are required."}), 400
+
+    attempt_ref = db.collection("Users").document(user_id).collection("final_quiz_attempts").document(attempt_id)
+    try:
+        attempt_doc = attempt_ref.get()
+        if not attempt_doc.exists: return jsonify({"error": "Final quiz attempt not found."}), 404
+        
+        quiz_data = attempt_doc.to_dict()
+        quiz_questions = quiz_data.get("quiz_questions", [])
+        
+        score = 0
+        for i, q in enumerate(quiz_questions):
+            user_answer_index = user_answers.get(str(i))
+            correct_answer_index = q.get("correct_answer_index")
+            if user_answer_index is not None and int(user_answer_index) == correct_answer_index:
+                score += 1
+        
+        attempt_ref.update({
+            "user_answers": user_answers,
+            "score": score,
+            "status": "completed",
+            "completed_at": firestore.SERVER_TIMESTAMP
+        })
+        
+        return jsonify({
+            "title": quiz_data.get("title"),
+            "user_answers": user_answers,
+            "score": score,
+            "questions_total": len(quiz_questions),
+            "quiz_questions": quiz_questions
+        })
+    except Exception as e:
+        print(f"[submit_final_quiz] Error: {e}")
+        return jsonify({"error": "Failed to score final quiz."}), 500
+
+@app.route("/get_final_quiz_attempt", methods=["POST"])
+def get_final_quiz_attempt():
+    data = request.get_json()
+    user_id, attempt_id = data.get("user_id"), data.get("attempt_id")
+    if not user_id or not attempt_id: return jsonify({"error": "User and Attempt ID required."}), 400
+    try:
+        doc = db.collection("Users").document(user_id).collection("final_quiz_attempts").document(attempt_id).get()
+        if not doc.exists: return jsonify({"error": "Final quiz attempt not found"}), 404
+        return jsonify(doc.to_dict())
+    except Exception as e:
+        print(f"[get_final_quiz_attempt] Error: {e}")
+        return jsonify({"error": "Could not retrieve final quiz attempt."}), 500
+
+@app.route("/retake_final_quiz", methods=["POST"])
+def retake_final_quiz():
+    data = request.get_json()
+    user_id, original_attempt_id = data.get("user_id"), data.get("original_attempt_id")
+    if not user_id or not original_attempt_id: return jsonify({"error": "User and Original Attempt ID required."}), 400
+
+    try:
+        # Get the original quiz data
+        original_doc_ref = db.collection("Users").document(user_id).collection("final_quiz_attempts").document(original_attempt_id)
+        original_doc = original_doc_ref.get()
+        if not original_doc.exists: return jsonify({"error": "Original final quiz not found."}), 404
+        original_data = original_doc.to_dict()
+
+        # Create a new attempt document with the same questions
+        new_attempt_ref = db.collection("Users").document(user_id).collection("final_quiz_attempts").document()
+        new_attempt_ref.set({
+            "title": original_data.get("title") + " (Retake)",
+            "topic_ids": original_data.get("topic_ids"),
+            "quiz_questions": original_data.get("quiz_questions"),
+            "questions_total": original_data.get("questions_total"),
+            "started_at": firestore.SERVER_TIMESTAMP,
+            "status": "in-progress",
+            "score": None,
+            "user_answers": {}
+        })
+        
+        return jsonify({
+            "attempt_id": new_attempt_ref.id,
+            "quiz_questions": original_data.get("quiz_questions")
+        })
+    except Exception as e:
+        print(f"[retake_final_quiz] Error: {e}")
+        return jsonify({"error": "Could not create retake quiz."}), 500
+
+# ── MAIN ─────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    app.run(debug=True)
+
+--- authenticate.py ---
+import os
+from google_auth_oauthlib.flow import InstalledAppFlow
+
+# This is the scope we defined in the Google Cloud Console.
+# It requests read-only access to Google Drive.
+SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+
+def main():
+    """
+    This function handles the user authentication flow.
+    """
+    creds = None
+    
+    # The file token.json stores the user's access and refresh tokens.
+    # It is created automatically when the authorization flow completes for the first time.
+    if os.path.exists('token.json'):
+        print("Token file already exists. Authentication successful.")
+        return
+
+    # If there are no (valid) credentials available, let the user log in.
+    # This will read your 'client_secret.json' file.
+    flow = InstalledAppFlow.from_client_secrets_file(
+        'client_secret.json', SCOPES)
+    
+    # This line will automatically open a browser window for you to log in.
+    creds = flow.run_local_server(port=8080)
+    
+    # Save the credentials for the next run
+    with open('token.json', 'w') as token:
+        token.write(creds.to_json())
+        
+    print("Authentication successful! A 'token.json' file has been created.")
+
+if __name__ == '__main__':
+    main()
+
+--- export.js ---
+const fs = require("fs");
+const path = require("path");
+
+const allowedExtensions = [".js", ".json", ".html", ".css", ".md", ".py"];
+const ignoredDirs = ["node_modules", ".git"];
+const ignoredFiles = [
+  "exportProject.js",
+  "client_secret.json",
+  "token.json",
+  "gitignore",
+  "content_library.json",
+];
+
+function shouldIgnore(filePath) {
+  return ignoredDirs.some((dir) =>
+    filePath.includes(path.sep + dir + path.sep)
+  );
+}
+
+function gatherFiles(dir, collected = []) {
+  const entries = fs.readdirSync(dir);
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry);
+    const stats = fs.statSync(fullPath);
+    if (stats.isDirectory()) {
+      if (!ignoredDirs.includes(entry)) {
+        gatherFiles(fullPath, collected);
+      }
+    } else if (
+      allowedExtensions.includes(path.extname(entry)) &&
+      !shouldIgnore(fullPath) &&
+      !ignoredFiles.includes(entry)
+    ) {
+      collected.push(fullPath);
+    }
+  }
+  return collected;
+}
+
+function exportFiles() {
+  const files = gatherFiles(".");
+  const output = [];
+
+  for (const file of files) {
+    const content = fs.readFileSync(file, "utf8");
+    output.push(`--- ${file} ---\n${content}`);
+  }
+
+  fs.writeFileSync("project_export.txt", output.join("\n\n"));
+  console.log(
+    `✅ Export complete! ${files.length} files written to project_export.txt`
+  );
+}
+
+exportFiles();
+
+
+--- parser.py ---
+import os.path
+import json
+import datetime
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from google.cloud import firestore # <-- NEW IMPORT
+
+SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+TOC_DOCUMENT_URL = 'https://docs.google.com/document/d/1RFGdf5q8kHueTwThJvt7ITkhsSqsin39hHl5ugIveX8/edit?usp=sharing'
+
+def get_credentials():
+    """Handles user authentication and returns valid credentials."""
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                'client_secret.json', SCOPES)
+            creds = flow.run_local_server(port=8081)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+    return creds
+
+def read_paragraph_text(elements):
+    """Reads the text from a list of paragraph elements."""
+    text = ''
+    for element in elements:
+        if 'textRun' in element:
+            text += element.get('textRun').get('content')
+    return text
+
+def get_lesson_urls(docs_service, document_id):
+    """Reads the TOC doc and extracts all lesson URLs."""
+    # This function remains the same as before.
+    print("Reading Table of Contents to find lesson URLs...")
+    urls = {}
+    try:
+        document = docs_service.documents().get(documentId=document_id).execute()
+        content = document.get('body').get('content')
+        for element in content:
+            if 'paragraph' in element:
+                para_elements = element.get('paragraph').get('elements')
+                for para_element in para_elements:
+                    if 'textRun' in para_element:
+                        text_run = para_element.get('textRun')
+                        text_style = text_run.get('textStyle')
+                        if text_style and 'link' in text_style:
+                            text = text_run.get('content').strip()
+                            url = text_style.get('link').get('url')
+                            if text and url and 'docs.google.com' in url:
+                                urls[text] = url
+        print(f"Found {len(urls)} lesson links.")
+        return urls
+    except HttpError as err:
+        print(f"Error reading TOC: {err}")
+        return {}
+
+def parse_lesson_doc(docs_service, title, url):
+    """
+    Reads a single lesson doc and intelligently parses it into structured sections.
+    """
+    print(f"  -> Parsing lesson: '{title}'")
+    try:
+        doc_id = url.split('/d/')[1].split('/')[0]
+        document = docs_service.documents().get(documentId=doc_id).execute()
+        content = document.get('body').get('content')
+        
+        today_date = datetime.date.today().isoformat()
+        lesson_data = {
+            'title': title,
+            'url': url,
+            'version': '1.0',
+            'date_updated': today_date,
+            'goal': '',
+            'outcomes': [],
+            'talking_points': '',
+            'resources': [],
+            'philosophy': '',
+            'other_notes': '',
+            'tasks': []
+        }
+        
+        current_section = None
+        
+        for element in content:
+            if 'paragraph' in element:
+                para = element.get('paragraph')
+                text = read_paragraph_text(para.get('elements')).strip()
+
+                if not text:
+                    continue
+
+                if text.startswith('Version:'):
+                    lesson_data['version'] = text.replace('Version:', '').strip()
+                    current_section = None
+                elif text.startswith('Date:'):
+                    lesson_data['date_updated'] = text.replace('Date:', '').strip()
+                    current_section = None
+                elif text.startswith('Chapter Goal:'):
+                    current_section = 'goal'
+                    lesson_data['goal'] = text.replace('Chapter Goal:', '').strip()
+                elif text.startswith('By the end of this chapter you will be able to:'):
+                    current_section = 'outcomes'
+                elif text.startswith('Advisor Talking Points (Cliff Version):'):
+                    current_section = 'talking_points'
+                    lesson_data['talking_points'] = text.replace('Advisor Talking Points (Cliff Version):', '').strip()
+                elif text.startswith('Key Advisor Tools/Resources:'):
+                    current_section = 'resources'
+                elif text.startswith('Abundo Philosophy:'):
+                    current_section = 'philosophy'
+                    lesson_data['philosophy'] = text.replace('Abundo Philosophy:', '').strip()
+                elif text.startswith('Other Notes:'):
+                    current_section = 'other_notes'
+                    lesson_data['other_notes'] = text.replace('Other Notes:', '').strip()
+                elif text.startswith('Chapter Task List'):
+                    current_section = 'tasks'
+                else:
+                    if current_section == 'goal':
+                        lesson_data['goal'] += ' ' + text
+                    elif current_section == 'outcomes':
+                        lesson_data['outcomes'].append(text)
+                    elif current_section == 'talking_points':
+                        lesson_data['talking_points'] += ' ' + text
+                    elif current_section == 'resources':
+                        lesson_data['resources'].append(text)
+                    elif current_section == 'philosophy':
+                        lesson_data['philosophy'] += ' ' + text
+                    elif current_section == 'other_notes':
+                        lesson_data['other_notes'] += ' ' + text
+                    elif current_section == 'tasks':
+                        is_bold = para.get('elements')[0].get('textRun').get('textStyle').get('bold', False)
+                        if is_bold:
+                            lesson_data['tasks'].append({'title': text, 'description': ''})
+                        elif lesson_data['tasks']:
+                            lesson_data['tasks'][-1]['description'] += ' ' + text
+        
+        return lesson_data
+
+    except HttpError as err:
+        print(f"    ERROR: Could not parse doc '{title}'. Reason: {err}")
+        return None
+
+def main():
+    """Main function to run the parser and upload to Firestore."""
+    creds = get_credentials()
+    docs_service = build('docs', 'v1', credentials=creds)
+    
+    toc_doc_id = TOC_DOCUMENT_URL.split('/d/')[1].split('/')[0]
+    lesson_urls = get_lesson_urls(docs_service, toc_doc_id)
+
+    if not lesson_urls:
+        print("No lesson URLs found. Exiting.")
+        return
+
+    # --- NEW FIRESTORE LOGIC ---
+    # Initialize Firestore client
+    db = firestore.Client()
+    print("\nUploading lessons to Firestore...")
+
+    for title, url in lesson_urls.items():
+        if "Getting Started" in title or "The Abundo High Five" in title:
+            print(f"  -> Skipping non-lesson doc: '{title}'")
+            continue
+        
+        lesson_data = parse_lesson_doc(docs_service, title, url)
+        if lesson_data:
+            # We will use the lesson title as the unique ID for the document.
+            # We replace slashes to make it a valid ID.
+            doc_id = title.replace('/', '-')
+            
+            # Get a reference to the document and upload the data
+            doc_ref = db.collection('ContentMaster').document(doc_id)
+            doc_ref.set(lesson_data)
+            print(f"    -> Successfully uploaded '{title}'")
+    
+    print("\nSUCCESS! All content has been uploaded to the Firestore 'ContentMaster' collection.")
+
+if __name__ == '__main__':
+    main()
+
+--- read_docs.py ---
+import os.path
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+
+def main():
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                'client_secret.json', SCOPES)
+            creds = flow.run_local_server(port=8080)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+
+    try:
+        docs_service = build('docs', 'v1', credentials=creds)
+
+        doc_url = 'https://docs.google.com/document/d/1RFGdf5q8kHueTwThJvt7ITkhsSqsin39hHl5ugIveX8/edit?usp=sharing'
+        
+        document_id = doc_url.split('/d/')[1].split('/')[0]
+
+        document = docs_service.documents().get(documentId=document_id).execute()
+        
+        print(f"SUCCESS! Reading links from document: '{document.get('title')}'")
+        print("-" * 30)
+
+        # --- UPDATED CODE STARTS HERE ---
+        doc_content = document.get('body').get('content')
+        
+        print("Found the following links:")
+        
+        # Loop through each structural element in the document
+        for element in doc_content:
+            if 'paragraph' in element:
+                para_elements = element.get('paragraph').get('elements')
+                for para_element in para_elements:
+                    if 'textRun' in para_element:
+                        text_run = para_element.get('textRun')
+                        
+                        # Check if this textRun has a link style attached
+                        text_style = text_run.get('textStyle')
+                        if text_style and 'link' in text_style:
+                            # It's a link! Let's get the text and the URL.
+                            visible_text = text_run.get('content').strip()
+                            url = text_style.get('link').get('url')
+                            
+                            # We only want to print if both text and URL exist
+                            if visible_text and url:
+                                print(f"  - {visible_text} -> {url}")
+        # --- UPDATED CODE ENDS HERE ---
+
+    except HttpError as err:
+        print(err)
+
+if __name__ == '__main__':
+    main()
+
+--- sample_lesson.md ---
+# Paying Down or Paying Off Debt (Including Refinancing)
+
+**URL:** [Google Doc Link](if applicable)  
+**Version:** 1.0  
+**Last Updated:** 2025-06-21
+
+---
+
+## Goal
+
+Develop a personalized debt management strategy that aligns with your financial goals, enabling you to systematically reduce or eliminate debt while maintaining balance with other priorities.
+
+---
+
+## Outcomes
+
+- Understand the true cost of each debt in your financial picture
+- Prioritize debts strategically based on financial and psychological factors
+- Evaluate refinancing opportunities to potentially reduce interest costs
+- Create a systematic debt reduction plan that fits your budget and timeline
+- Balance debt repayment with other important financial goals
+- Determine when it makes mathematical sense to pay extra on debts versus investing
+- Recognize and avoid common debt management pitfalls and predatory practices
+
+---
+
+## Talking Points
+
+This chapter helps clients take control of their debt by first categorizing it (high-interest vs low-interest, secured vs unsecured) and then creating a systematic plan for reduction. Many clients struggle with deciding whether to focus on debt repayment or investing; we'll help them understand when each makes mathematical sense while acknowledging that the psychological benefits of debt freedom may outweigh pure math for some.
+
+For those with multiple debts, we'll explore both the **debt snowball** (smallest balance first) and **debt avalanche** (highest interest first) methods. Refinancing opportunities can be valuable tools, but we'll evaluate them carefully to ensure the costs don't outweigh the benefits. The ultimate goal is to help clients use debt strategically when it serves their goals while methodically eliminating burdensome debt that restricts their choices.
+
+---
+
+## Resources
+
+- RightCapital debt management module
+- _The Path to Getting Out of Debt_ (blog post)
+- Student Loans & [StudentAid.gov](https://studentaid.gov) resource (including Loan Simulator tool)
+- Debt payoff calculators (snowball vs. avalanche comparison)
+- Debt Free Charts
+- [Bankrate Mortgage Refinance Calculator](https://www.bankrate.com/calculators/mortgages/refinance-calculator.aspx)
+- [Bankrate Current Mortgage Rates](https://www.bankrate.com/mortgages/mortgage-rates/)
+- Abundo’s quarterly interest rate presentations
+- [AnnualCreditReport.com](https://www.annualcreditreport.com/)
+
+---
+
+## Philosophy
+
+At Abundo, we believe that not all debt is created equal, and our approach recognizes that some debt can be strategic (like low-interest mortgages) while other debt is destructive (like high-interest credit cards). We don't take a one-size-fits-all approach to debt elimination—instead, we help clients make intentional choices based on their unique financial situation and goals.
+
+While we value the peace of mind that comes with debt freedom, we're also pragmatic about the opportunity costs of aggressive debt repayment versus investing. Our approach to refinancing is deliberately cautious—we analyze fees, interest savings, and time horizons to ensure clients genuinely benefit from any restructuring.
+
+---
+
+## Other Notes
+
+Clients often have emotional associations with debt that can interfere with objective decision-making. Some may feel intense shame or anxiety around debt, leading to avoidance behaviors, while others may have become too comfortable with debt as a lifestyle enabler.
+
+When discussing debt management, be sensitive to these emotional factors while still helping clients move toward more strategic choices. For couples, debt discussions can be particularly charged if they have different money scripts or if one partner brought significantly more debt into the relationship.
+
+Also remain aware of unique considerations for different debt types—student loans have repayment options that other debts don't, while mortgage decisions should factor in tax implications and housing market conditions. Note the behavioral risk of refinancing: a consolidation loan or 0% transfer can lead to more total debt if chronic overspending is an issue.
+
+---
+
+## Tasks
+
+### 1. Complete Your Debt Inventory
+
+Create a comprehensive list of all debts, including creditor name, current balance, interest rate, minimum payment, payment due date, and estimated payoff date at current payment levels. Note whether each debt is fixed or variable rate, and whether it's secured by any assets. This gives you the complete picture needed to develop a strategic plan.
+
+### 2. Evaluate Refinancing Opportunities
+
+Research current interest rates for each type of debt you carry. For each debt, determine if refinancing might save you money by calculating total interest costs under current terms versus potential new terms. Remember to include any fees or closing costs in your calculations to determine true break-even points. Flag debts with the highest potential savings for immediate action.
+
+### 3. Choose Your Debt Payoff Strategy
+
+After reviewing the mathematical benefits of the **debt avalanche** method (highest interest first) and the psychological benefits of the **debt snowball** method (smallest balance first), select your preferred approach. Create a detailed payoff schedule with target dates for each debt and track your progress visually to maintain motivation.
+
+### 4. Create Debt Reduction Acceleration Plan
+
+Identify at least 3–5 specific actions you can take to accelerate your debt payoff, such as redirecting windfalls (tax refunds, bonuses, gifts), eliminating specific expenses temporarily, or generating additional income. Commit to specific dollar amounts from each source and add them to your debt payoff schedule.
+
+### 5. Set Up Payment Automation
+
+Automate minimum payments for all debts to avoid late fees and credit damage. For the debt you're prioritizing first, set up an additional automatic payment on a specific date each month to accelerate payoff. This removes the decision-making friction that often prevents consistent extra payments.
+
+### 6. Establish Guardrails Against New Debt
+
+Create specific guidelines for when you would consider taking on new debt in the future. Define what types of debt align with your values and financial goals (if any) and establish criteria any new debt must meet before you would consider it. Consider implementing a mandatory waiting period or consultation process before any new debt.
+
+### 7. Create Celebration Milestones
+
+Identify specific milestones in your debt payoff journey (25% paid, 50% paid, first debt completely eliminated, etc.) and plan meaningful but affordable celebrations for each achievement. Having planned rewards increases motivation and acknowledges the discipline required for successful debt reduction.
+
+### 8. Review and Update Protection Strategies
+
+Evaluate your insurance coverage and emergency fund in light of your debts. Ensure you have adequate protection to prevent a financial setback from derailing your debt payoff plan. Consider whether disability insurance or increased emergency savings might be needed while you're focusing on debt elimination.
+
+### 9. Schedule Quarterly Debt Strategy Check-ins
+
+Set calendar reminders to review your debt reduction progress and strategy every three months. During these check-ins, assess whether your chosen method is working, whether any refinancing opportunities have emerged, and whether your balance between debt payoff and other financial goals still feels appropriate.
+
+
+--- static/style.css ---
+/* FILE: static/style.css */
+
+body {
+  font-family: sans-serif;
+  margin: 0;
+  background-color: #f4f4f9;
+  color: #333;
+}
+.page-container {
+  max-width: 900px;
+  margin: auto;
+  padding: 2em;
+}
+h1,
+h2,
+h3,
+h4 {
+  color: #0056b3;
+}
+button {
+  background-color: #007bff;
+  color: white;
+  padding: 10px 15px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 1em;
+  transition: background-color 0.2s;
+}
+button:hover {
+  background-color: #0056b3;
+}
+button:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+ul {
+  list-style-type: none;
+  padding: 0;
+}
+#login-container {
+  text-align: center;
+  padding: 4em 2em;
+}
+
+/* --- Lesson Library View --- */
+#lesson-library-view li {
+  background-color: #fff;
+  margin: 0.5em 0;
+  padding: 1em;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 1px solid #ddd;
+  transition: box-shadow 0.2s;
+}
+#lesson-library-view li:hover {
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+#final-quiz-button {
+  background-color: #28a745;
+  width: 100%;
+  padding: 15px;
+  font-size: 1.2em;
+  margin-top: 1em;
+}
+#final-quiz-button:hover {
+  background-color: #218838;
+}
+
+/* --- Lesson Taking View & Results View --- */
+#lesson-taking-view,
+#results-view,
+#final-quiz-view {
+  margin-top: 1em;
+  padding: 1.5em;
+  background-color: #fff;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+.quiz-question {
+  margin-top: 2em;
+  padding: 1em;
+  border: 1px solid #e0e0e0;
+  border-radius: 5px;
+  background-color: #f9f9f9;
+}
+.quiz-options label {
+  display: block;
+  margin: 0.5em 0;
+  padding: 0.5em;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 2px solid transparent;
+}
+.quiz-options label:hover {
+  background-color: #e9ecef;
+}
+.quiz-options input[type="radio"]:checked + span {
+  font-weight: bold;
+}
+.results-summary {
+  padding: 1em;
+  border-radius: 5px;
+  background-color: #e9ecef;
+  text-align: center;
+  margin-bottom: 2em;
+}
+.results-question {
+  margin-bottom: 1.5em;
+  padding-bottom: 1.5em;
+  border-bottom: 1px solid #eee;
+}
+.results-options .option {
+  padding: 0.5em;
+  border-radius: 5px;
+  margin: 0.2em 0;
+  display: flex;
+  align-items: center;
+}
+.results-options .option.correct {
+  background-color: #d4edda;
+  border-left: 5px solid #155724;
+}
+.results-options .option.incorrect-selection {
+  background-color: #f8d7da;
+  border-left: 5px solid #721c24;
+}
+.results-options .option .icon {
+  margin-right: 0.5em;
+  font-size: 1.2em;
+}
+.explanation {
+  margin-top: 1em;
+  padding: 1em;
+  background-color: #f8f9fa;
+  border-left: 3px solid #007bff;
+}
+.smart-focus-prompt {
+  padding: 1.5em;
+  background-color: #fffbe6;
+  border: 1px solid #ffe58f;
+  border-radius: 5px;
+  text-align: center;
+  margin-top: 2em;
+}
+.smart-focus-prompt button {
+  background-color: #ffc107;
+  color: #212529;
+}
+.smart-focus-prompt button:hover {
+  background-color: #e0a800;
+}
+.back-to-library {
+  margin-top: 2em;
+}
+
+/* --- Final Quiz Modal --- */
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 2000;
+  display: none;
+  justify-content: center;
+  align-items: center;
+}
+.modal-content {
+  background: white;
+  padding: 2em;
+  border-radius: 8px;
+  width: 90%;
+  max-width: 600px;
+}
+#topic-selection-list {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid #ddd;
+  padding: 1em;
+  border-radius: 5px;
+  margin-bottom: 1em;
+}
+#topic-selection-list label {
+  display: block;
+  margin: 0.5em 0;
+}
+
+/* --- AI Tutor --- */
+#tutor-button {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 1000;
+  padding: 15px 25px;
+  border-radius: 50px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  font-size: 1.2em;
+  display: none;
+}
+#tutor-chat-container {
+  position: fixed;
+  bottom: 100px;
+  right: 20px;
+  width: 350px;
+  max-height: 500px;
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+  z-index: 999;
+  display: none;
+  flex-direction: column;
+}
+#tutor-chat-header {
+  padding: 10px;
+  background: #0056b3;
+  color: white;
+  border-radius: 10px 10px 0 0;
+  font-weight: bold;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+#tutor-close-btn {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 1.5em;
+  cursor: pointer;
+  padding: 0 10px;
+}
+#tutor-chat-history {
+  flex-grow: 1;
+  padding: 10px;
+  overflow-y: auto;
+}
+.chat-message {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 15px;
+  margin-bottom: 10px;
+  word-wrap: break-word;
+}
+.user-message {
+  background-color: #007bff;
+  color: white;
+  margin-left: auto;
+  border-bottom-right-radius: 0;
+}
+.tutor-message {
+  background-color: #e9ecef;
+  color: #333;
+  margin-right: auto;
+  border-bottom-left-radius: 0;
+}
+#tutor-input-area {
+  display: flex;
+  padding: 10px;
+  border-top: 1px solid #ddd;
+}
+#tutor-input {
+  flex-grow: 1;
+  border: 1px solid #ccc;
+  border-radius: 20px;
+  padding: 10px;
+  resize: none;
+}
+#tutor-send-btn {
+  margin-left: 10px;
+  border-radius: 50%;
+  width: 45px;
+  height: 45px;
+  padding: 0;
+}
+
+
+--- templates/index.html ---
+<!-- FILE: templates/index.html -->
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Paramigo</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='style.css') }}"
+    />
+    <style>
+      .lesson-item-indicator {
+        font-size: 0.8em;
+        font-weight: bold;
+        color: #28a745;
+        margin-left: 10px;
+      }
+      .attempt-item {
+        background-color: #f9f9f9;
+        border: 1px solid #eee;
+        padding: 1em;
+        margin-bottom: 0.5em;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+      .attempt-item:hover {
+        background-color: #f1f1f1;
+      }
+      .results-actions {
+        margin-top: 2em;
+        padding-top: 1em;
+        border-top: 1px solid #eee;
+        display: flex;
+        gap: 1em;
+        flex-wrap: wrap;
+      }
+      .results-actions .delete-btn {
+        background-color: #dc3545;
+      }
+      .results-actions .delete-btn:hover {
+        background-color: #c82333;
+      }
+      .lesson-accordion summary {
+        cursor: pointer;
+        font-weight: bold;
+        color: #0056b3;
+        margin: 1em 0;
+      }
+      .smart-focus-prompt button {
+        margin-top: 1em;
+      }
+      .smart-focus-prompt ul {
+        list-style-type: disc;
+        padding-left: 20px;
+      }
+      .smart-focus-prompt li {
+        margin-bottom: 0.5em;
+      }
+      #final-quiz-history-list .attempt-item {
+        background-color: #e6f7ff;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="login-container" class="page-container">
+      <h1>Welcome to Paramigo</h1>
+      <p>Please sign in to continue.</p>
+      <button id="login-btn">Sign in with Google</button>
+    </div>
+
+    <div id="app-container" style="display: none">
+      <header class="page-container" style="padding-bottom: 0">
+        <p>
+          Hello, <span id="user-name"></span>!
+          <a href="#" id="logout-btn" style="margin-left: 1em">(Sign Out)</a>
+          <a href="/onboarding" id="change-style-link" style="margin-left: 1em"
+            >(Change Learning Style)</a
+          >
+        </p>
+      </header>
+
+      <main id="lesson-library-view" class="page-container"></main>
+      <main
+        id="topic-detail-view"
+        class="page-container"
+        style="display: none"
+      ></main>
+      <main
+        id="lesson-taking-view"
+        class="page-container"
+        style="display: none"
+      ></main>
+      <main
+        id="results-view"
+        class="page-container"
+        style="display: none"
+      ></main>
+      <main
+        id="final-quiz-view"
+        class="page-container"
+        style="display: none"
+      ></main>
+    </div>
+
+    <button id="tutor-button" style="display: none" onclick="toggleTutor()">
+      Ask Tutor 💬
+    </button>
+    <div id="tutor-chat-container">
+      <div id="tutor-chat-header">
+        <span>AI Tutor</span>
+        <button id="tutor-close-btn" onclick="toggleTutor()">×</button>
+      </div>
+      <div id="tutor-chat-history"></div>
+      <div id="tutor-input-area">
+        <input id="tutor-input" placeholder="Ask a question..." />
+        <button id="tutor-send-btn" onclick="sendTutorMessage()">➤</button>
+      </div>
+    </div>
+
+    <div id="final-quiz-modal" class="modal-backdrop">
+      <div class="modal-content">
+        <h2>Create a Cumulative Quiz</h2>
+        <p>
+          Select the topics you want to include and the total number of
+          questions for your quiz.
+        </p>
+        <div
+          style="
+            margin-bottom: 1em;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 0.5em;
+          "
+        >
+          <label>
+            <input type="checkbox" id="select-all-topics-checkbox" />
+            <strong>Select All / Deselect All</strong>
+          </label>
+        </div>
+        <div id="topic-selection-list">
+          <!-- Checkboxes will be populated by JS -->
+        </div>
+        <div>
+          <label for="question-count-input">Number of Questions:</label>
+          <input
+            type="number"
+            id="question-count-input"
+            value="10"
+            min="5"
+            max="20"
+            style="width: 60px"
+          />
+        </div>
+        <div style="margin-top: 2em">
+          <button id="generate-final-quiz-btn">Generate Quiz</button>
+          <button id="cancel-final-quiz-btn" style="background-color: #6c757d">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+      import {
+        getAuth,
+        onAuthStateChanged,
+        GoogleAuthProvider,
+        signInWithPopup,
+        signOut,
+      } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+      // --- Firebase Config ---
+      const firebaseConfig = {
+        apiKey: "AIzaSyB4EJ5fu2ZGn3YG6NerCZRHfLj3F1mvpww",
+        authDomain: "paramigo-tool-03.firebaseapp.com",
+        projectId: "paramigo-tool-03",
+        storageBucket: "paramigo-tool-03.firebasestorage.app",
+        messagingSenderId: "626376082375",
+        appId: "1:626376082375:web:7b0edfa3319c258d900fe2",
+        measurementId: "G-5C44175E71",
+      };
+
+      const app = initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+
+      // --- Helpers ---
+      // Always return an *array* of option strings.
+      function normalizeOptions(optionsField) {
+        if (Array.isArray(optionsField)) return optionsField;
+        if (typeof optionsField === "string") {
+          // Split patterns like "A) Foo. B) Bar."  (fallback to commas / semicolons)
+          const matches = optionsField.match(/[A-Z]\)[^A-Z]*/g);
+          return (matches || optionsField.split(/[;,]/)).map((s) => s.trim());
+        }
+        return [];
+      }
+
+      // --- Global State ---
+      let currentUser = null;
+      let currentAttemptId = null;
+      let currentLessonId = null;
+      let currentLessonContext = null;
+      let libraryData = [];
+      let currentFinalQuizQuestions = [];
+
+      const loginContainer = document.getElementById("login-container");
+      const appContainer = document.getElementById("app-container");
+      const userNameSpan = document.getElementById("user-name");
+      const views = {
+        library: document.getElementById("lesson-library-view"),
+        topicDetail: document.getElementById("topic-detail-view"),
+        lesson: document.getElementById("lesson-taking-view"),
+        results: document.getElementById("results-view"),
+        finalQuiz: document.getElementById("final-quiz-view"),
+      };
+      const tutorButton = document.getElementById("tutor-button");
+      const tutorChatContainer = document.getElementById(
+        "tutor-chat-container"
+      );
+      const tutorChatHistory = document.getElementById("tutor-chat-history");
+      const tutorInput = document.getElementById("tutor-input");
+
+      const finalQuizModal = document.getElementById("final-quiz-modal");
+      const topicSelectionList = document.getElementById(
+        "topic-selection-list"
+      );
+      const generateFinalQuizBtn = document.getElementById(
+        "generate-final-quiz-btn"
+      );
+      const cancelFinalQuizBtn = document.getElementById(
+        "cancel-final-quiz-btn"
+      );
+      const questionCountInput = document.getElementById(
+        "question-count-input"
+      );
+      const selectAllTopicsCheckbox = document.getElementById(
+        "select-all-topics-checkbox"
+      );
+
+      // --- View Helpers ---
+      function showView(viewName) {
+        Object.values(views).forEach((v) => (v.style.display = "none"));
+        views[viewName].style.display = "block";
+        tutorButton.style.display =
+          viewName === "lesson" || viewName === "results" ? "block" : "none";
+        window.scrollTo(0, 0);
+      }
+      window.showView = showView;
+
+      // --- Initialisation & Library Rendering ---
+      async function initializeAppForUser(user) {
+        currentUser = user;
+        const response = await fetch("/get_library_and_history", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: currentUser.uid }),
+        });
+        const data = await response.json();
+        libraryData = data.library;
+        const finalQuizHistory = data.final_quiz_history || [];
+
+        const finalQuizHistoryHtml =
+          finalQuizHistory.length > 0
+            ? `
+            <div id="final-quiz-history" style="margin-top: 2em;">
+                <h3>Final Quiz History</h3>
+                <ul id="final-quiz-history-list">${finalQuizHistory
+                  .map(
+                    (h) => `
+                    <li class="attempt-item" onclick="reviewFinalQuiz('${
+                      h.attempt_id
+                    }')">
+                        <strong>${h.title}</strong><br>
+                        Score: ${
+                          h.score !== null
+                            ? `${h.score}/${h.questions_total}`
+                            : "In Progress"
+                        }<br>
+                        <small>Taken on: ${new Date(
+                          h.started_at
+                        ).toLocaleString()}</small>
+                    </li>
+                `
+                  )
+                  .join("")}</ul>
+            </div>
+        `
+            : "";
+
+        views.library.innerHTML = `
+            <h2>Lesson Library</h2>
+            <p>Select a topic to begin or review your history.</p>
+            <ul id="lesson-list">${libraryData
+              .map((topic) => {
+                const startedIndicator =
+                  topic.attempts.length > 0
+                    ? '<span class="lesson-item-indicator">✔ Started</span>'
+                    : "";
+                return `<li class="lesson-item" onclick="showTopicDetail('${topic.id}')">${topic.title} ${startedIndicator}</li>`;
+              })
+              .join("")}</ul>
+            <button id="final-quiz-button">Take a Final Quiz</button>
+            ${finalQuizHistoryHtml}
+        `;
+        document
+          .getElementById("final-quiz-button")
+          .addEventListener("click", showFinalQuizModal);
+        showView("library");
+      }
+
+      function showTopicDetail(topicId) {
+        currentLessonId = topicId;
+        const topic = libraryData.find((t) => t.id === topicId);
+        if (!topic) return;
+        let historyHtml =
+          topic.attempts.length > 0
+            ? topic.attempts
+                .map(
+                  (h) => `
+            <li class="attempt-item" onclick="reviewLesson('${h.attempt_id}')">
+                <strong>${h.title}</strong><br>
+                Score: ${
+                  h.score !== null
+                    ? `${h.score}/${h.questions_total}`
+                    : "In Progress"
+                }
+                <br>
+                <small>Taken on: ${new Date(
+                  h.started_at
+                ).toLocaleString()}</small>
+            </li>`
+                )
+                .join("")
+            : "<p>You have no history for this topic yet.</p>";
+        views.topicDetail.innerHTML = `
+            <button onclick="showView('library')">← Back to Library</button>
+            <h2 style="margin-top: 1em;">${topic.title}</h2>
+            <button onclick="startLesson('${topic.id}')">Start New Attempt</button>
+            <hr style="margin: 2em 0;">
+            <h3>Your Previous Attempts</h3>
+            <ul>${historyHtml}</ul>`;
+        showView("topicDetail");
+      }
+      window.showTopicDetail = showTopicDetail;
+
+      // --- Lesson Attempt Flow ---
+      async function startLesson(lessonId, originalAttemptId = null) {
+        views.lesson.innerHTML =
+          "<h2>Loading Lesson...</h2><p>Please wait...</p>";
+        showView("lesson");
+        try {
+          const payload = { user_id: currentUser.uid, lesson_id: lessonId };
+          if (originalAttemptId)
+            payload.original_attempt_id = originalAttemptId;
+          const response = await fetch("/start_lesson", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const data = await response.json();
+          if (data.error) throw new Error(data.error);
+          currentAttemptId = data.attempt_id;
+          currentLessonId = data.lesson_id;
+          currentLessonContext = data.content;
+          renderLessonTakingView(data.content);
+        } catch (error) {
+          views.lesson.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
+        }
+      }
+      window.startLesson = startLesson;
+
+      async function startMultiConceptLesson(concepts, parentLessonId) {
+        views.lesson.innerHTML =
+          "<h2>Generating Focused Lesson...</h2><p>Synthesizing a new lesson based on your weak points, please wait...</p>";
+        showView("lesson");
+        try {
+          const response = await fetch("/start_multi_concept_lesson", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: currentUser.uid,
+              concepts: concepts,
+              parent_lesson_id: parentLessonId,
+            }),
+          });
+          const data = await response.json();
+          if (data.error) throw new Error(data.error);
+          currentAttemptId = data.attempt_id;
+          currentLessonId = data.lesson_id;
+          currentLessonContext = data.content;
+          renderLessonTakingView(data.content);
+        } catch (error) {
+          views.lesson.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
+        }
+      }
+      window.startMultiConceptLesson = startMultiConceptLesson;
+
+      async function submitQuiz() {
+        const form = document.getElementById("quiz-form");
+        const formData = new FormData(form);
+        const userAnswers = Object.fromEntries(formData.entries());
+        views.results.innerHTML = "<h2>Scoring Quiz...</h2>";
+        showView("results");
+        try {
+          const response = await fetch("/submit_quiz", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: currentUser.uid,
+              attempt_id: currentAttemptId,
+              user_answers: userAnswers,
+              lesson_id: currentLessonId,
+            }),
+          });
+          const data = await response.json();
+          if (data.error) throw new Error(data.error);
+          currentLessonContext = data.content;
+          renderResultsView(data, currentAttemptId);
+        } catch (error) {
+          views.results.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
+        }
+      }
+      window.submitQuiz = submitQuiz;
+
+      async function reviewLesson(attemptId) {
+        views.results.innerHTML = "<h2>Loading History...</h2>";
+        showView("results");
+        try {
+          const response = await fetch("/get_lesson_attempt", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: currentUser.uid,
+              attempt_id: attemptId,
+            }),
+          });
+          const data = await response.json();
+          if (data.error) throw new Error(data.error);
+          currentLessonContext = data.content;
+          currentLessonId = data.lesson_id;
+          renderResultsView(data, attemptId);
+        } catch (error) {
+          views.results.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
+        }
+      }
+      window.reviewLesson = reviewLesson;
+
+      async function deleteAttempt(attemptId, lessonId) {
+        if (
+          !confirm("Are you sure you want to permanently delete this attempt?")
+        )
+          return;
+        try {
+          await fetch("/delete_attempt", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: currentUser.uid,
+              attempt_id: attemptId,
+            }),
+          });
+          await initializeAppForUser(currentUser);
+          showTopicDetail(lessonId);
+        } catch (error) {
+          alert("Error deleting attempt: " + error.message);
+        }
+      }
+      window.deleteAttempt = deleteAttempt;
+
+      // --- Renderers ---
+      function renderLessonTakingView(content) {
+        const shuffledQuestions = [...content.quiz_questions].sort(
+          () => Math.random() - 0.5
+        );
+
+        const quizHtml = shuffledQuestions
+          .map((q, index) => {
+            const originalIndex = content.quiz_questions.indexOf(q);
+
+            // ✅ Ensure options is an array
+            const optionsArray = normalizeOptions(q.options);
+
+            const optionsHtml = optionsArray
+              .map(
+                (option, optIndex) =>
+                  `<label><input type="radio" name="${originalIndex}" value="${optIndex}" required><span>${option}</span></label>`
+              )
+              .join("");
+
+            return `<div class="quiz-question"><h4>${index + 1}. ${
+              q.question
+            }</h4><div class="quiz-options">${optionsHtml}</div></div>`;
+          })
+          .join("");
+
+        views.lesson.innerHTML = `
+            <div>${content.lesson_html}</div>
+            <form id="quiz-form"><h3>Check Your Understanding</h3>${quizHtml}<button type="button" onclick="submitQuiz()">Submit & Score My Quiz</button></form>
+            <button class="back-to-library" onclick="showTopicDetail('${currentLessonId}')" style="margin-top: 1em; background-color: #6c757d;">Cancel and Go Back</button>`;
+      }
+
+      function renderResultsView(data, attemptId) {
+        const {
+          lesson_id,
+          content,
+          user_answers,
+          score,
+          questions_total,
+          smart_focus,
+        } = data;
+        let lessonAccordionHtml = `<details class="lesson-accordion"><summary>Click to review original lesson</summary><div>${content.lesson_html}</div></details>`;
+        let resultsHtml =
+          `<h2>Reviewing: ${content.title || "Lesson"}</h2>` +
+          lessonAccordionHtml +
+          `<hr style="margin: 2em 0;" /><div id="quiz-anchor"></div><div class="results-summary"><h3>Your Score: ${score} / ${questions_total}</h3></div>`;
+        resultsHtml += content.quiz_questions
+          .map((q, index) => {
+            const userAnswer = user_answers[String(index)];
+
+            // ✅ Ensure options is an array
+            const optionsArray = normalizeOptions(q.options);
+
+            const optionsHtml = optionsArray
+              .map((option, optIndex) => {
+                let className = "option",
+                  icon = "⚪";
+                if (optIndex === q.correct_answer_index) {
+                  className += " correct";
+                  icon = "✅";
+                } else if (String(optIndex) === userAnswer) {
+                  className += " incorrect-selection";
+                  icon = "❌";
+                }
+                return `<div class="${className}"><span class="icon">${icon}</span> ${option}</div>`;
+              })
+              .join("");
+            return `<div class="results-question"><h4>${index + 1}. ${
+              q.question
+            }</h4><div class="results-options">${optionsHtml}</div><div class="explanation"><strong>Explanation:</strong> ${
+              q.explanation
+            }</div></div>`;
+          })
+          .join("");
+
+        if (
+          smart_focus &&
+          smart_focus.smart_focus_needed &&
+          smart_focus.missed_concepts.length > 0
+        ) {
+          const conceptsHtmlList = smart_focus.missed_concepts
+            .map((concept) => `<li><strong>${concept}</strong></li>`)
+            .join("");
+
+          resultsHtml += `
+                <div class="smart-focus-prompt">
+                    <h3>💡 Smart Focus Opportunity</h3>
+                    <p>It looks like you had some trouble with the following concepts:</p>
+                    <ul>${conceptsHtmlList}</ul>
+                    <hr>
+                    <p><strong>Here's a quick refresher:</strong> ${smart_focus.explanation}</p>
+                    <button id="generate-focus-lesson-btn">Generate a lesson on these concepts</button>
+                </div>`;
+        }
+
+        resultsHtml += `
+            <div class="results-actions">
+                <button onclick="showTopicDetail('${lesson_id}')">← Back to Topic</button>
+                <button onclick="startLesson('${lesson_id}', '${attemptId}')">Retake Quiz</button>
+                <button class="delete-btn" onclick="deleteAttempt('${attemptId}', '${lesson_id}')">Delete This Attempt</button>
+            </div>`;
+
+        views.results.innerHTML = resultsHtml;
+
+        const generateBtn = document.getElementById(
+          "generate-focus-lesson-btn"
+        );
+        if (generateBtn) {
+          generateBtn.addEventListener("click", () => {
+            startMultiConceptLesson(smart_focus.missed_concepts, lesson_id);
+          });
+        }
+
+        document.getElementById("quiz-anchor")?.scrollIntoView();
+      }
+
+      // --- Auth Controls ---
+      document
+        .getElementById("login-btn")
+        .addEventListener("click", () =>
+          signInWithPopup(auth, new GoogleAuthProvider())
+        );
+      document.getElementById("logout-btn").addEventListener("click", (e) => {
+        e.preventDefault();
+        signOut(auth);
+      });
+      onAuthStateChanged(auth, async (user) => {
+        loginContainer.style.display = user ? "none" : "block";
+        appContainer.style.display = user ? "block" : "none";
+        if (user) {
+          const response = await fetch("/create_user", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              uid: user.uid,
+              displayName: user.displayName,
+              email: user.email,
+            }),
+          });
+          const userData = await response.json();
+          if (userData.needs_onboarding) {
+            window.location.href = "/onboarding";
+            return;
+          }
+          userNameSpan.innerText = user.displayName || "User";
+          initializeAppForUser(user);
+        } else {
+          currentUser = null;
+          libraryData = [];
+        }
+      });
+
+      // --- Final Quiz Logic (unchanged except for earlier normalisation already present) ---
+      function showFinalQuizModal() {
+        topicSelectionList.innerHTML = libraryData
+          .map(
+            (topic) => `
+            <label>
+                <input type="checkbox" name="final-quiz-topic" value="${topic.id}">
+                ${topic.title}
+            </label>
+        `
+          )
+          .join("");
+        finalQuizModal.style.display = "flex";
+      }
+
+      function hideFinalQuizModal() {
+        finalQuizModal.style.display = "none";
+      }
+
+      async function generateFinalQuiz() {
+        const selectedTopics = Array.from(
+          document.querySelectorAll('input[name="final-quiz-topic"]:checked')
+        ).map((cb) => cb.value);
+        const questionCount = parseInt(questionCountInput.value, 10);
+
+        if (selectedTopics.length < 1) {
+          alert("Please select at least one topic for the quiz.");
+          return;
+        }
+        if (questionCount < 5 || questionCount > 20) {
+          alert("Please request between 5 and 20 questions.");
+          return;
+        }
+
+        hideFinalQuizModal();
+        views.finalQuiz.innerHTML = `<h2>Generating Final Quiz...</h2><p>Please wait while we create your cumulative quiz from the selected topics.</p>`;
+        showView("finalQuiz");
+
+        try {
+          const response = await fetch("/generate_final_quiz", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: currentUser.uid,
+              topic_ids: selectedTopics,
+              question_count: questionCount,
+            }),
+          });
+          const data = await response.json();
+          if (data.error) throw new Error(data.error);
+          currentAttemptId = data.attempt_id;
+          currentFinalQuizQuestions = data.quiz_questions;
+          renderFinalQuizView(currentFinalQuizQuestions);
+        } catch (error) {
+          views.finalQuiz.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
+        }
+      }
+
+      function renderFinalQuizView(questions) {
+        const shuffledQuestions = [...questions].sort(
+          () => Math.random() - 0.5
+        );
+        const quizHtml = shuffledQuestions
+          .map((q, index) => {
+            const originalIndex = questions.indexOf(q);
+
+            // Already normalised earlier
+            const optionsArray = normalizeOptions(q.options);
+
+            const optionsHtml = optionsArray
+              .map(
+                (option, optIndex) =>
+                  `<label><input type="radio" name="${originalIndex}" value="${optIndex}" required><span>${option}</span></label>`
+              )
+              .join("");
+
+            return `<div class="quiz-question"><h4>${index + 1}. ${
+              q.question
+            }</h4><div class="quiz-options">${optionsHtml}</div></div>`;
+          })
+          .join("");
+
+        views.finalQuiz.innerHTML = `
+            <h2>Cumulative Final Quiz</h2>
+            <form id="final-quiz-form">
+                ${quizHtml}
+                <button type="button" onclick="submitFinalQuiz()">Submit Final Quiz</button>
+            </form>
+            <button class="back-to-library" onclick="showView('library')" style="margin-top: 1em; background-color: #6c757d;">Cancel and Go Back</button>`;
+      }
+      window.renderFinalQuizView = renderFinalQuizView;
+
+      async function submitFinalQuiz() {
+        const form = document.getElementById("final-quiz-form");
+        const formData = new FormData(form);
+        const userAnswers = Object.fromEntries(formData.entries());
+
+        views.finalQuiz.innerHTML = "<h2>Scoring Final Quiz...</h2>";
+        showView("finalQuiz");
+
+        try {
+          const response = await fetch("/submit_final_quiz", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: currentUser.uid,
+              attempt_id: currentAttemptId,
+              user_answers: userAnswers,
+            }),
+          });
+          const data = await response.json();
+          if (data.error) throw new Error(data.error);
+          renderFinalQuizResults(data, currentAttemptId);
+        } catch (error) {
+          views.finalQuiz.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
+        }
+      }
+      window.submitFinalQuiz = submitFinalQuiz;
+
+      function renderFinalQuizResults(data, attemptId) {
+        const { user_answers, score, questions_total, quiz_questions, title } =
+          data;
+        let resultsHtml = `
+            <h2>Final Quiz Results: ${title}</h2>
+            <div class="results-summary"><h3>Your Score: ${score} / ${questions_total}</h3></div>
+        `;
+        resultsHtml += quiz_questions
+          .map((q, index) => {
+            const userAnswer = user_answers[String(index)];
+
+            const optionsArray = normalizeOptions(q.options);
+
+            const optionsHtml = optionsArray
+              .map((option, optIndex) => {
+                let className = "option",
+                  icon = "⚪";
+                if (optIndex === q.correct_answer_index) {
+                  className += " correct";
+                  icon = "✅";
+                } else if (String(optIndex) === userAnswer) {
+                  className += " incorrect-selection";
+                  icon = "❌";
+                }
+                return `<div class="${className}"><span class="icon">${icon}</span> ${option}</div>`;
+              })
+              .join("");
+
+            return `<div class="results-question"><h4>${index + 1}. ${
+              q.question
+            }</h4><div class="results-options">${optionsHtml}</div><div class="explanation"><strong>Explanation:</strong> ${
+              q.explanation
+            }</div></div>`;
+          })
+          .join("");
+
+        resultsHtml += `
+            <div class="results-actions">
+                <button onclick="showView('library')">← Back to Library</button>
+                <button onclick="retakeFinalQuiz('${attemptId}')">Retake This Quiz</button>
+            </div>`;
+        views.finalQuiz.innerHTML = resultsHtml;
+        window.scrollTo(0, 0);
+      }
+      window.renderFinalQuizResults = renderFinalQuizResults;
+
+      async function reviewFinalQuiz(attemptId) {
+        views.finalQuiz.innerHTML = "<h2>Loading Final Quiz History...</h2>";
+        showView("finalQuiz");
+        try {
+          const response = await fetch("/get_final_quiz_attempt", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: currentUser.uid,
+              attempt_id: attemptId,
+            }),
+          });
+          const data = await response.json();
+          if (data.error) throw new Error(data.error);
+          renderFinalQuizResults(data, attemptId);
+        } catch (error) {
+          views.finalQuiz.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
+        }
+      }
+      window.reviewFinalQuiz = reviewFinalQuiz;
+
+      async function retakeFinalQuiz(originalAttemptId) {
+        views.finalQuiz.innerHTML = `<h2>Reloading Quiz...</h2><p>Please wait.</p>`;
+        showView("finalQuiz");
+        try {
+          const response = await fetch("/retake_final_quiz", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              user_id: currentUser.uid,
+              original_attempt_id: originalAttemptId,
+            }),
+          });
+          const data = await response.json();
+          if (data.error) throw new Error(data.error);
+          currentAttemptId = data.attempt_id;
+          currentFinalQuizQuestions = data.quiz_questions;
+          renderFinalQuizView(currentFinalQuizQuestions);
+        } catch (error) {
+          views.finalQuiz.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
+        }
+      }
+      window.retakeFinalQuiz = retakeFinalQuiz;
+
+      generateFinalQuizBtn.addEventListener("click", generateFinalQuiz);
+      cancelFinalQuizBtn.addEventListener("click", hideFinalQuizModal);
+
+      selectAllTopicsCheckbox.addEventListener("change", (event) => {
+        const checkboxes = document.querySelectorAll(
+          'input[name="final-quiz-topic"]'
+        );
+        checkboxes.forEach((checkbox) => {
+          checkbox.checked = event.target.checked;
+        });
+      });
+
+      // --- Tutor Logic ---
+      function toggleTutor() {
+        const isHidden =
+          tutorChatContainer.style.display === "none" ||
+          tutorChatContainer.style.display === "";
+        tutorChatContainer.style.display = isHidden ? "flex" : "none";
+      }
+      window.toggleTutor = toggleTutor;
+
+      function addMessageToHistory(message, type) {
+        const messageDiv = document.createElement("div");
+        messageDiv.className = `chat-message ${type}-message`;
+        messageDiv.innerText = message;
+        tutorChatHistory.appendChild(messageDiv);
+        tutorChatHistory.scrollTop = tutorChatHistory.scrollHeight;
+      }
+      window.addMessageToHistory = addMessageToHistory;
+
+      async function sendTutorMessage() {
+        const question = tutorInput.value.trim();
+        if (!question || !currentLessonContext) return;
+        addMessageToHistory(question, "user");
+        tutorInput.value = "";
+        addMessageToHistory("Typing...", "tutor");
+        try {
+          const response = await fetch("/ask_tutor", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              question: question,
+              context: JSON.stringify(currentLessonContext),
+            }),
+          });
+          const data = await response.json();
+          tutorChatHistory.removeChild(tutorChatHistory.lastChild);
+          addMessageToHistory(data.answer, "tutor");
+        } catch (error) {
+          tutorChatHistory.removeChild(tutorChatHistory.lastChild);
+          addMessageToHistory("Sorry, I had trouble connecting.", "tutor");
+        }
+      }
+      window.sendTutorMessage = sendTutorMessage;
+
+      tutorInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendTutorMessage();
+        }
+      });
+    </script>
+  </body>
+</html>
+
+
+--- templates/onboarding.html ---
+<!-- FILE: templates/onboarding.html -->
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Welcome to Paramigo</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        margin: 0;
+        background-color: #f4f4f9;
+        color: #333;
+      }
+      .container {
+        max-width: 800px;
+        text-align: center;
+        padding: 2em;
+      }
+      h1 {
+        color: #0056b3;
+      }
+      .style-options {
+        display: flex;
+        gap: 1em;
+        margin-top: 2em;
+        text-align: left;
+      }
+      .style-box {
+        flex: 1;
+        padding: 1.5em;
+        background-color: #fff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+      }
+      .style-box h3 {
+        margin-top: 0;
+        color: #007bff;
+      }
+      .style-box p {
+        flex-grow: 1;
+      }
+      .custom-option {
+        margin-top: 2em;
+      }
+      textarea {
+        width: 100%;
+        padding: 0.5em;
+        border-radius: 5px;
+        border: 1px solid #ccc;
+        min-height: 60px;
+        box-sizing: border-box;
+      }
+      button {
+        background-color: #007bff;
+        color: white;
+        padding: 10px 15px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        margin-top: 1em;
+      }
+      button:hover {
+        background-color: #0056b3;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Let's Personalize Your Learning</h1>
+      <p>
+        To help us tailor the content for you, please read the three
+        explanations of "compound interest" below.
+      </p>
+      <p>
+        <strong>Which one makes the most sense to you?</strong>
+      </p>
+
+      <div class="style-options">
+        {% for style in styles %}
+        <div class="style-box">
+          <h3>{{ style.style_name }}</h3>
+          <p>{{ style.explanation }}</p>
+          <button onclick="savePreference('{{ style.style_name }}')">
+            I like this style
+          </button>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="custom-option">
+        <p>Or, describe the style you prefer in your own words:</p>
+        <textarea
+          id="custom-style-input"
+          placeholder="e.g., 'Explain it to me like I'm five' or 'Give me only the bullet points'"
+        ></textarea>
+        <button onclick="saveCustomPreference()">Save My Preference</button>
+      </div>
+    </div>
+
+    <script type="module">
+      // Import only what we need for this page
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+      import {
+        getAuth,
+        onAuthStateChanged,
+      } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+      // Same Firebase config as your main page
+      const firebaseConfig = {
+        apiKey: "AIzaSyB4EJ5fu2ZGn3YG6NerCZRHfLj3F1mvpww",
+        authDomain: "paramigo-tool-03.firebaseapp.com",
+        projectId: "paramigo-tool-03",
+        storageBucket: "paramigo-tool-03.firebasestorage.app",
+        messagingSenderId: "626376082375",
+        appId: "1:626376082375:web:7b0edfa3319c258d900fe2",
+        measurementId: "G-5C44175E71",
+      };
+
+      const app = initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+
+      let currentUser = null;
+
+      // We need to know who the current user is to save their preference
+      onAuthStateChanged(auth, (user) => {
+        if (user) {
+          currentUser = user;
+        } else {
+          // If for some reason they land here without being logged in, send them home.
+          window.location.href = "/";
+        }
+      });
+
+      // This function will be called when the user clicks one of the three buttons
+      window.savePreference = async function (styleName) {
+        if (!currentUser) {
+          alert("Error: Not signed in.");
+          return;
+        }
+
+        await fetch("/save_preference", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            uid: currentUser.uid,
+            style: styleName,
+          }),
+        });
+
+        // After saving, send them to the main app page
+        window.location.href = "/";
+      };
+
+      // This function handles the custom text input
+      window.saveCustomPreference = async function () {
+        if (!currentUser) {
+          alert("Error: Not signed in.");
+          return;
+        }
+
+        const customStyle = document.getElementById("custom-style-input").value;
+        if (!customStyle.trim()) {
+          alert("Please enter a description of your preferred style.");
+          return;
+        }
+
+        await savePreference(customStyle); // We can reuse the same function
+      };
+    </script>
+  </body>
+</html>

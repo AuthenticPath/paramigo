@@ -1,0 +1,179 @@
+<!-- FILE: templates/onboarding.html -->
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Welcome to Paramigo</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        margin: 0;
+        background-color: #f4f4f9;
+        color: #333;
+      }
+      .container {
+        max-width: 800px;
+        text-align: center;
+        padding: 2em;
+      }
+      h1 {
+        color: #0056b3;
+      }
+      .style-options {
+        display: flex;
+        gap: 1em;
+        margin-top: 2em;
+        text-align: left;
+      }
+      .style-box {
+        flex: 1;
+        padding: 1.5em;
+        background-color: #fff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+      }
+      .style-box h3 {
+        margin-top: 0;
+        color: #007bff;
+      }
+      .style-box p {
+        flex-grow: 1;
+      }
+      .custom-option {
+        margin-top: 2em;
+      }
+      textarea {
+        width: 100%;
+        padding: 0.5em;
+        border-radius: 5px;
+        border: 1px solid #ccc;
+        min-height: 60px;
+        box-sizing: border-box;
+      }
+      button {
+        background-color: #007bff;
+        color: white;
+        padding: 10px 15px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        margin-top: 1em;
+      }
+      button:hover {
+        background-color: #0056b3;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Let's Personalize Your Learning</h1>
+      <p>
+        To help us tailor the content for you, please read the three
+        explanations of "compound interest" below.
+      </p>
+      <p>
+        <strong>Which one makes the most sense to you?</strong>
+      </p>
+
+      <div class="style-options">
+        {% for style in styles %}
+        <div class="style-box">
+          <h3>{{ style.style_name }}</h3>
+          <p>{{ style.explanation }}</p>
+          <button onclick="savePreference('{{ style.style_name }}')">
+            I like this style
+          </button>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="custom-option">
+        <p>Or, describe the style you prefer in your own words:</p>
+        <textarea
+          id="custom-style-input"
+          placeholder="e.g., 'Explain it to me like I'm five' or 'Give me only the bullet points'"
+        ></textarea>
+        <button onclick="saveCustomPreference()">Save My Preference</button>
+      </div>
+    </div>
+
+    <script type="module">
+      // Import only what we need for this page
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+      import {
+        getAuth,
+        onAuthStateChanged,
+      } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+      // Same Firebase config as your main page
+      const firebaseConfig = {
+        apiKey: "AIzaSyB4EJ5fu2ZGn3YG6NerCZRHfLj3F1mvpww",
+        authDomain: "paramigo-tool-03.firebaseapp.com",
+        projectId: "paramigo-tool-03",
+        storageBucket: "paramigo-tool-03.firebasestorage.app",
+        messagingSenderId: "626376082375",
+        appId: "1:626376082375:web:7b0edfa3319c258d900fe2",
+        measurementId: "G-5C44175E71",
+      };
+
+      const app = initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+
+      let currentUser = null;
+
+      // We need to know who the current user is to save their preference
+      onAuthStateChanged(auth, (user) => {
+        if (user) {
+          currentUser = user;
+        } else {
+          // If for some reason they land here without being logged in, send them home.
+          window.location.href = "/";
+        }
+      });
+
+      // This function will be called when the user clicks one of the three buttons
+      window.savePreference = async function (styleName) {
+        if (!currentUser) {
+          alert("Error: Not signed in.");
+          return;
+        }
+
+        await fetch("/save_preference", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            uid: currentUser.uid,
+            style: styleName,
+          }),
+        });
+
+        // After saving, send them to the main app page
+        window.location.href = "/";
+      };
+
+      // This function handles the custom text input
+      window.saveCustomPreference = async function () {
+        if (!currentUser) {
+          alert("Error: Not signed in.");
+          return;
+        }
+
+        const customStyle = document.getElementById("custom-style-input").value;
+        if (!customStyle.trim()) {
+          alert("Please enter a description of your preferred style.");
+          return;
+        }
+
+        await savePreference(customStyle); // We can reuse the same function
+      };
+    </script>
+  </body>
+</html>
