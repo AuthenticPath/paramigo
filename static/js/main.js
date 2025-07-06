@@ -150,7 +150,7 @@ function showView(name) {
 }
 window.showView = showView;
 
-/* ───── 5.  LIBRARY & DASHBOARD RENDERING ─────────────────────────────── */
+/* ───── 5. LIBRARY & DASHBOARD RENDERING ─────────────────────────────── */
 async function initializeAppForUser(user) {
   currentUser = user;
   // Now expects three lists from the backend
@@ -203,9 +203,19 @@ async function initializeAppForUser(user) {
     `;
   }
 
+  // ===== [THIS IS THE NEW CODE BLOCK] =====
+  // Inject the button between the created topics and the final quiz history.
+  libraryHtml += `
+    <hr style="margin:2em 0; border-top: 1px solid var(--c-border);">
+    <button id="final-quiz-button" class="btn-outline" style="width:100%; text-align:center;">
+        Take a Final Quiz
+    </button>
+  `;
+  // ========================================
+
   if (final_quiz_history?.length) {
     libraryHtml += `
-      <hr style="margin:2em 0">
+      <hr style="margin:2em 0; border-top: 1px solid var(--c-border);">
       <h3>Final Quiz History</h3>
       <ul id="final-quiz-history-list">
         ${final_quiz_history
@@ -228,48 +238,13 @@ async function initializeAppForUser(user) {
 
   dynamicArea.innerHTML = libraryHtml;
 
-  // --- THIS IS THE FIX ---
-  // We re-add the event listener for the Final Quiz button, which was accidentally removed.
-  $("#final-quiz-button").addEventListener("click", showFinalQuizModal);
+  // This event listener will now find the button we just injected into the HTML.
+  if ($("#final-quiz-button")) {
+    $("#final-quiz-button").addEventListener("click", showFinalQuizModal);
+  }
 
   showView("library");
 }
-
-/* ── Topic detail ───────────────── */
-function showTopicDetail(topicId) {
-  currentLessonId = topicId;
-  const topic = libraryData.find((t) => t.id === topicId);
-  if (!topic) return;
-
-  const history = topic.attempts
-    .map(
-      (a) => `<li class="attempt-item" onclick="reviewLesson('${
-        a.attempt_id
-      }')">
-               <strong>${a.title}</strong><br>
-               Score: ${
-                 a.score !== null
-                   ? `${a.score}/${a.questions_total}`
-                   : "In Progress"
-               }<br>
-               <small>${new Date(a.started_at).toLocaleString()}</small>
-             </li>`
-    )
-    .join("");
-
-  views.topicDetail.innerHTML = `
-    <button onclick="showView('library')">← Back to Library</button>
-    <h2 style="margin-top:1em">${topic.title}</h2>
-    <button class="btn-primary" onclick="startLesson('${
-      topic.id
-    }')">Start New Attempt</button>
-    <hr style="margin:2em 0">
-    <h3>Your Previous Attempts</h3>
-    ${history || "<p>You have no history for this topic yet.</p>"}  
-  `;
-  showView("topicDetail");
-}
-window.showTopicDetail = showTopicDetail;
 
 /* ───── 6.  LESSON FLOW ──────────────────────────────────────────────── */
 async function startLesson(lessonId, originalAttemptId = null) {
