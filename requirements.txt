@@ -1,0 +1,6 @@
+flask
+google-cloud-firestore
+google-generativeai
+python-dotenv
+openpyxl
+fpdf2

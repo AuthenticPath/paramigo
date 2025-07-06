@@ -1,107 +1,201 @@
-/* FILE: static/style.css */
+/* FILE: static/style.css
+   Paramigo UI • Modern Refresh • June 24 2025
+   ────────────────────────────────────────────
+   ✱ Design language:
+     • Soft neutral palette (indigo + slate grays)
+     • Subtle shadows, 8 px radius, ample white-space
+     • Utility button classes (.btn-primary / .btn-outline)
+   ✱ Responsive mobile-first; desktop optimised at ≥768 px
+   ✱ Includes legacy ID selectors so existing markup keeps working
+*/
+
+/* ─── CSS Variables / Palette ───────────────────────────────────────────── */
+:root {
+  --c-bg: #f5f7fa;
+  --c-card: #ffffff;
+  --c-border: #e0e4ea;
+  --c-text: #1f2937;
+  --c-muted: #6b7280;
+
+  --c-primary: #3b82f6; /* indigo-blue */
+  --c-primary-dark: #2563eb;
+  --c-primary-light: #dbeafe;
+
+  --c-success: #16a34a;
+  --c-danger: #dc2626;
+  --c-warning: #f59e0b;
+
+  --radius: 8px;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  font-size: 16px;
+}
+
+/* ─── Global Resets ─────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 
 body {
-  font-family: sans-serif;
   margin: 0;
-  background-color: #f4f4f9;
-  color: #333;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--c-bg);
+  color: var(--c-text);
+  line-height: 1.55;
 }
-.page-container {
-  max-width: 900px;
-  margin: auto;
-  padding: 2em;
-}
+
 h1,
 h2,
 h3,
 h4 {
-  color: #0056b3;
-}
-button {
-  background-color: #007bff;
-  color: white;
-  padding: 10px 15px;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 1em;
-  transition: background-color 0.2s;
-}
-button:hover {
-  background-color: #0056b3;
-}
-button:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
-}
-ul {
-  list-style-type: none;
-  padding: 0;
-}
-#login-container {
-  text-align: center;
-  padding: 4em 2em;
+  margin: 0.4em 0;
+  line-height: 1.25;
 }
 
-/* --- Lesson Library View --- */
+a {
+  color: var(--c-primary);
+  text-decoration: none;
+}
+
+button,
+input[type="number"],
+input[type="checkbox"] {
+  font-family: inherit;
+}
+
+/* ─── Utility Buttons ───────────────────────────────────────────────────── */
+.btn-primary,
+.btn-outline {
+  padding: 10px 18px;
+  font-size: 1rem;
+  border-radius: var(--radius);
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.06s;
+  user-select: none;
+}
+
+.btn-primary {
+  background: var(--c-primary);
+  color: #fff;
+  border-color: var(--c-primary);
+}
+.btn-primary:hover {
+  background: var(--c-primary-dark);
+  border-color: var(--c-primary-dark);
+}
+
+.btn-outline {
+  background: #fff;
+  color: var(--c-primary);
+  border-color: var(--c-primary);
+}
+.btn-outline:hover {
+  background: var(--c-primary-light);
+}
+
+.btn-primary:active,
+.btn-outline:active {
+  transform: translateY(1px);
+}
+
+/* Legacy IDs to maintain behaviour */
+#final-quiz-button {
+  composes: btn-outline;
+  width: 100%;
+  padding: 14px;
+  margin-top: 1rem;
+}
+
+/* ─── Layout Helpers ────────────────────────────────────────────────────── */
+.page-container {
+  width: 90%;
+  max-width: 900px;
+  margin: 2rem auto;
+}
+
+/* Library Controls */
+.library-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+/* ─── Lesson Library View ──────────────────────────────────────────────── */
 #lesson-library-view li {
-  background-color: #fff;
+  background: var(--c-card);
   margin: 0.5em 0;
   padding: 1em;
-  border-radius: 5px;
+  border-radius: var(--radius);
+  border: 1px solid var(--c-border);
   cursor: pointer;
-  border: 1px solid #ddd;
   transition: box-shadow 0.2s;
 }
 #lesson-library-view li:hover {
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-}
-#final-quiz-button {
-  background-color: #28a745;
-  width: 100%;
-  padding: 15px;
-  font-size: 1.2em;
-  margin-top: 1em;
-}
-#final-quiz-button:hover {
-  background-color: #218838;
+  box-shadow: var(--shadow-sm);
 }
 
-/* --- Lesson Taking View & Results View --- */
+.lesson-item-indicator {
+  font-size: 0.8em;
+  font-weight: bold;
+  color: var(--c-success);
+  margin-left: 10px;
+}
+
+/* Topic attempt history */
+.attempt-item {
+  background: #f9f9f9;
+  border: 1px solid var(--c-border);
+  padding: 1em;
+  margin-bottom: 0.5em;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.attempt-item:hover {
+  background: #f1f1f1;
+}
+
+/* ─── Card-like Sections ───────────────────────────────────────────────── */
 #lesson-taking-view,
 #results-view,
 #final-quiz-view {
   margin-top: 1em;
   padding: 1.5em;
-  background-color: #fff;
-  border: 1px solid #ddd;
-  border-radius: 8px;
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
 }
+
+/* ─── Quiz & Results ───────────────────────────────────────────────────── */
 .quiz-question {
-  margin-top: 2em;
+  margin-top: 1.75em;
   padding: 1em;
-  border: 1px solid #e0e0e0;
-  border-radius: 5px;
-  background-color: #f9f9f9;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  background: #f9f9f9;
 }
 .quiz-options label {
   display: block;
   margin: 0.5em 0;
   padding: 0.5em;
-  border-radius: 5px;
+  border-radius: var(--radius);
   cursor: pointer;
   border: 2px solid transparent;
 }
 .quiz-options label:hover {
-  background-color: #e9ecef;
+  background: var(--c-primary-light);
 }
 .quiz-options input[type="radio"]:checked + span {
   font-weight: bold;
 }
+
 .results-summary {
   padding: 1em;
-  border-radius: 5px;
-  background-color: #e9ecef;
+  border-radius: var(--radius);
+  background: #e9ecef;
   text-align: center;
   margin-bottom: 2em;
 }
@@ -112,112 +206,150 @@ ul {
 }
 .results-options .option {
   padding: 0.5em;
-  border-radius: 5px;
-  margin: 0.2em 0;
+  border-radius: var(--radius);
+  margin: 0.25em 0;
   display: flex;
   align-items: center;
 }
 .results-options .option.correct {
-  background-color: #d4edda;
-  border-left: 5px solid #155724;
+  background: #d1fae5;
+  border-left: 5px solid var(--c-success);
 }
 .results-options .option.incorrect-selection {
-  background-color: #f8d7da;
-  border-left: 5px solid #721c24;
+  background: #fee2e2;
+  border-left: 5px solid var(--c-danger);
 }
-.results-options .option .icon {
+.results-options .icon {
   margin-right: 0.5em;
   font-size: 1.2em;
 }
 .explanation {
   margin-top: 1em;
   padding: 1em;
-  background-color: #f8f9fa;
-  border-left: 3px solid #007bff;
+  background: #f8f9fa;
+  border-left: 3px solid var(--c-primary);
 }
+
+/* Smart Focus Prompt */
 .smart-focus-prompt {
   padding: 1.5em;
-  background-color: #fffbe6;
+  background: #fffbe6;
   border: 1px solid #ffe58f;
-  border-radius: 5px;
+  border-radius: var(--radius);
   text-align: center;
   margin-top: 2em;
 }
 .smart-focus-prompt button {
-  background-color: #ffc107;
+  background: var(--c-warning);
   color: #212529;
 }
 .smart-focus-prompt button:hover {
-  background-color: #e0a800;
-}
-.back-to-library {
-  margin-top: 2em;
+  background: #e0a800;
 }
 
-/* --- Final Quiz Modal --- */
+/* ─── Back/Generic Buttons ─────────────────────────────────────────────── */
+.back-to-library,
+.delete-btn {
+  margin-top: 2em;
+}
+.delete-btn {
+  background: var(--c-danger);
+}
+.delete-btn:hover {
+  background: #b91c1c;
+}
+
+/* ─── Accordions ───────────────────────────────────────────────────────── */
+.accordion {
+  margin-top: 1.25em;
+}
+.accordion-head {
+  background: var(--c-primary);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 0.6em 1em;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.accordion-body {
+  background: #f1f5f9;
+  border: 1px solid var(--c-border);
+  border-radius: 0 0 var(--radius) var(--radius);
+  padding: 1em;
+  white-space: pre-wrap;
+  font-size: 0.9rem;
+}
+
+/* ─── Final Quiz Modal (unchanged structurally) ────────────────────────── */
 .modal-backdrop {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.5);
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
   z-index: 2000;
   display: none;
   justify-content: center;
   align-items: center;
 }
+
 .modal-content {
-  background: white;
+  background: var(--c-card);
   padding: 2em;
-  border-radius: 8px;
+  border-radius: var(--radius);
   width: 90%;
   max-width: 600px;
-}
-#topic-selection-list {
-  max-height: 300px;
-  overflow-y: auto;
-  border: 1px solid #ddd;
-  padding: 1em;
-  border-radius: 5px;
-  margin-bottom: 1em;
-}
-#topic-selection-list label {
-  display: block;
-  margin: 0.5em 0;
+  box-shadow: var(--shadow-md);
+
+  /* --- NEW STYLES TO FIX SCROLLING --- */
+  max-height: 85vh; /* 1. The modal can never be taller than 85% of the screen height */
+  display: flex; /* 2. This enables modern layout control for the children */
+  flex-direction: column; /* 3. This stacks the children (header, list, buttons) vertically */
 }
 
-/* --- AI Tutor --- */
+/*
+  ADD this entire NEW rule right after the
+  .modal-content rule you just replaced.
+*/
+#topic-selection-list,
+#flashcard-topic-selection-list {
+  overflow-y: auto; /* 4. This makes ONLY the list itself scrollable if it's too long */
+  flex-grow: 1; /* 5. This tells the list to expand to fill the available space */
+  padding-right: 1em; /* 6. This adds a little space so the scrollbar doesn't hide text */
+}
+
+/* ─── Tutor Floating Chat ──────────────────────────────────────────────── */
 #tutor-button {
   position: fixed;
   bottom: 20px;
   right: 20px;
   z-index: 1000;
-  padding: 15px 25px;
+  padding: 14px 22px;
   border-radius: 50px;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-  font-size: 1.2em;
+  box-shadow: var(--shadow-md);
+  background: var(--c-primary);
+  color: #fff;
+  font-size: 1.1em;
   display: none;
 }
 #tutor-chat-container {
   position: fixed;
-  bottom: 100px;
+  bottom: 90px;
   right: 20px;
-  width: 350px;
+  width: 340px;
   max-height: 500px;
-  background: white;
-  border-radius: 10px;
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+  background: var(--c-card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
   z-index: 999;
   display: none;
   flex-direction: column;
 }
 #tutor-chat-header {
   padding: 10px;
-  background: #0056b3;
-  color: white;
-  border-radius: 10px 10px 0 0;
-  font-weight: bold;
+  background: var(--c-primary-dark);
+  color: #fff;
+  border-radius: var(--radius) var(--radius) 0 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -225,10 +357,9 @@ ul {
 #tutor-close-btn {
   background: none;
   border: none;
-  color: white;
-  font-size: 1.5em;
+  color: #fff;
+  font-size: 1.4em;
   cursor: pointer;
-  padding: 0 10px;
 }
 #tutor-chat-history {
   flex-grow: 1;
@@ -243,33 +374,134 @@ ul {
   word-wrap: break-word;
 }
 .user-message {
-  background-color: #007bff;
-  color: white;
+  background: var(--c-primary);
+  color: #fff;
   margin-left: auto;
   border-bottom-right-radius: 0;
 }
 .tutor-message {
-  background-color: #e9ecef;
-  color: #333;
+  background: #e9ecef;
+  color: var(--c-text);
   margin-right: auto;
   border-bottom-left-radius: 0;
 }
 #tutor-input-area {
   display: flex;
   padding: 10px;
-  border-top: 1px solid #ddd;
+  border-top: 1px solid var(--c-border);
 }
 #tutor-input {
   flex-grow: 1;
-  border: 1px solid #ccc;
+  border: 1px solid var(--c-border);
   border-radius: 20px;
-  padding: 10px;
-  resize: none;
+  padding: 8px 12px;
 }
 #tutor-send-btn {
   margin-left: 10px;
   border-radius: 50%;
-  width: 45px;
-  height: 45px;
-  padding: 0;
+  width: 44px;
+  height: 44px;
+  background: var(--c-primary);
+  color: #fff;
+  border: none;
+  font-size: 1.1em;
+  cursor: pointer;
 }
+
+/* ─── Flashcard Modal / Deck ───────────────────────────────────────────── */
+.modal-ov {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 3000;
+}
+.modal {
+  background: var(--c-card);
+  border-radius: var(--radius);
+  padding: 2rem;
+  width: 90%;
+  max-width: 650px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-md);
+  position: relative;
+}
+.modal .close {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  font-size: 1.5em;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.deck {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.card {
+  perspective: 800px;
+  cursor: pointer;
+}
+.face {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 1.2rem;
+  transition: transform 0.5s;
+  backface-visibility: hidden;
+  min-height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.card .back {
+  transform: rotateY(180deg);
+}
+.card.flip .front {
+  transform: rotateY(180deg);
+}
+.card.flip .back {
+  transform: rotateY(0);
+}
+
+/* Export buttons inside modal */
+.export {
+  margin-top: 1.5rem;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+/* ─── Media Queries ────────────────────────────────────────────────────── */
+@media (min-width: 768px) {
+  .page-container {
+    width: 80%;
+  }
+  .library-controls {
+    justify-content: flex-start;
+  }
+}
+
+/* --- FIX for Jumbled Modal --- */
+#topic-selection-list label,
+#flashcard-topic-selection-list label {
+  /* Targeting both modals for consistency */
+  display: block;
+  margin-bottom: 0.75em;
+  padding: 0.25em;
+  border-radius: 4px;
+}
+
+#topic-selection-list label:hover,
+#flashcard-topic-selection-list label:hover {
+  background-color: #f0f4f8;
+}
+/* END OF FILE */

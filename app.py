@@ -1,10 +1,13 @@
 # FILE: app.py
 
-import os, json, re
-from flask import Flask, render_template, jsonify, request
+import os, json, re, io
+from flask import Flask, render_template, jsonify, request, send_file
 from google.cloud import firestore
 from dotenv import load_dotenv
 import google.generativeai as genai
+from openpyxl import Workbook
+from fpdf import FPDF
+
 
 # ── CONFIG ───────────────────────────────────────────────────────────────────────
 load_dotenv()
@@ -35,6 +38,8 @@ def onboarding():
     return render_template("onboarding.html", styles=styles)
 
 # ── API: DATA LOADING ────────────────────────────────────────────────────────────
+# THIS IS THE REPLACEMENT FOR THE ENTIRE get_library_and_history FUNCTION
+
 @app.route("/get_library_and_history", methods=["POST"])
 def get_library_and_history():
     data = request.get_json()
@@ -51,17 +56,23 @@ def get_library_and_history():
             history_by_lesson[lesson_id] = []
         history_by_lesson[lesson_id].append({"attempt_id": doc.id, "title": d.get("title"), "score": d.get("score"), "questions_total": d.get("questions_total"), "started_at": d.get("started_at").isoformat()})
     
-    # Fetch the main library content
+    # Fetch the main library content and separate it
     library_docs = db.collection("ContentMaster").stream()
-    library_with_history = []
+    official_library = []
+    user_creations = []
     for doc in library_docs:
         doc_dict = doc.to_dict()
         title = doc_dict.get("title")
         if title:
             lesson_id = doc.id
-            library_with_history.append({"id": lesson_id, "title": title, "attempts": history_by_lesson.get(lesson_id, [])})
+            lesson_data = {"id": lesson_id, "title": title, "attempts": history_by_lesson.get(lesson_id, [])}
+            # NEW: Check for the ai_generated flag
+            if doc_dict.get("ai_generated"):
+                user_creations.append(lesson_data)
+            else:
+                official_library.append(lesson_data)
 
-    # NEW: Fetch final quiz history
+    # Fetch final quiz history
     final_quiz_history = []
     final_quiz_docs = db.collection("Users").document(user_id).collection("final_quiz_attempts").order_by("started_at", direction=firestore.Query.DESCENDING).stream()
     for doc in final_quiz_docs:
@@ -73,8 +84,12 @@ def get_library_and_history():
             "questions_total": d.get("questions_total"),
             "started_at": d.get("started_at").isoformat()
         })
-
-    return jsonify({"library": library_with_history, "final_quiz_history": final_quiz_history})
+    # Return two separate lists for the library
+    return jsonify({
+        "library": official_library, 
+        "user_creations": user_creations, 
+        "final_quiz_history": final_quiz_history
+    })
 
 @app.route("/get_lesson_attempt", methods=["POST"])
 def get_lesson_attempt():
@@ -102,6 +117,20 @@ def get_lesson_attempt():
         print(f"[get_lesson_attempt] Firestore error: {e}")
         return jsonify({"error": "Could not retrieve lesson history."}), 500
 
+@app.route("/get_source_material", methods=["POST"])
+def get_source_material():
+    data = request.get_json()
+    lesson_id = data.get("lesson_id")
+    if not lesson_id: return jsonify({"error": "Lesson ID is required."}), 400
+    try:
+        doc_ref = db.collection("ContentMaster").document(lesson_id)
+        doc = doc_ref.get()
+        if not doc.exists: return jsonify({"error": "Source material not found"}), 404
+        return jsonify(doc.to_dict())
+    except Exception as e:
+        print(f"[get_source_material] Firestore error: {e}")
+        return jsonify({"error": "Could not retrieve source material."}), 500
+
 # ── USER/PROFILE API ─────────────────────────────────────────────────────────────
 @app.route("/create_user", methods=["POST"])
 def create_user():
@@ -128,7 +157,6 @@ def save_preference():
         print(f"[save_preference] Firestore error: {e}")
         return jsonify({"status": "error", "message": "Could not save preference."}), 500
 
-# ── API: THE NEW LEARNING FLOW ───────────────────────────────────────────────────
 @app.route("/start_lesson", methods=["POST"])
 def start_lesson():
     data = request.get_json()
@@ -154,9 +182,26 @@ def start_lesson():
         source_doc_ref = db.collection("ContentMaster").document(lesson_id)
         source_doc = source_doc_ref.get()
         if not source_doc.exists: return jsonify({"error": "Lesson not found."}), 404
-        source_content = source_doc.to_dict()
-        source_title = source_content.get("title")
-        prompt = f'You are an expert financial trainer. Teach in the "{learning_style}" voice. **OUTPUT REQUIREMENTS (pure JSON):** {{"lesson_html": "<string - raw HTML>", "quiz_questions": [{{ "question": "<string>", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "explanation": "<string>" }}]}} # SOURCE MATERIAL: {json.dumps(source_content, ensure_ascii=False)}'
+        
+        source_content_full = source_doc.to_dict()
+        source_title = source_content_full.get("title")
+
+        def datetime_converter(o):
+            if isinstance(o, firestore.firestore.DatetimeWithNanoseconds):
+                return o.isoformat()
+            raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+        # --- THIS IS THE FIX ---
+        # If the topic is AI-generated, the "source" for the new AI prompt
+        # is the content inside the 'lesson_content' field.
+        if source_content_full.get("ai_generated"):
+            source_for_prompt = source_content_full.get("lesson_content", {})
+            prompt = f'You are an expert educator and trainer. Teach in the "{learning_style}" voice using the content provided as your source material. **OUTPUT REQUIREMENTS (pure JSON):** {{"lesson_html": "<string - raw HTML>", "quiz_questions": [{{ "question": "<string>", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "explanation": "<string>" }}]}} # SOURCE MATERIAL: {json.dumps(source_for_prompt, default=datetime_converter, ensure_ascii=False)}'
+        else:
+            # For human-made topics, the entire document is the source.
+            source_for_prompt = source_content_full
+            prompt = f'You are an expert financial trainer. Teach in the "{learning_style}" voice. **OUTPUT REQUIREMENTS (pure JSON):** {{"lesson_html": "<string - raw HTML>", "quiz_questions": [{{ "question": "<string>", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "explanation": "<string>" }}]}} # SOURCE MATERIAL: {json.dumps(source_for_prompt, default=datetime_converter, ensure_ascii=False)}'
+        
         try:
             model = genai.GenerativeModel("gemini-1.5-flash")
             raw_json = model.generate_content(prompt).text
@@ -298,6 +343,204 @@ def ask_tutor():
     except Exception as e:
         print(f"[ask_tutor] AI generation error: {e}")
         return jsonify({"error": "Sorry, I had a problem generating an answer."}), 500
+    
+@app.route("/delete_custom_topic", methods=["POST"])
+def delete_custom_topic():
+    data = request.get_json()
+    user_id, topic_id = data.get("user_id"), data.get("topic_id")
+    if not all([user_id, topic_id]): 
+        return jsonify({"error": "User ID and Topic ID are required."}), 400
+
+    try:
+        # Use a transaction or a batch to ensure atomicity
+        batch = db.batch()
+
+        # 1. Delete the master document from ContentMaster
+        master_ref = db.collection("ContentMaster").document(topic_id)
+        batch.delete(master_ref)
+
+        # 2. Find and delete all lesson attempts associated with this topic for the user
+        attempts_query = db.collection("Users").document(user_id).collection("lesson_attempts").where("lesson_id", "==", topic_id)
+        for doc in attempts_query.stream():
+            batch.delete(doc.reference)
+        
+        # 3. Commit all the deletions at once
+        batch.commit()
+        
+        return jsonify({"status": "success", "message": f"Topic {topic_id} and all its attempts have been deleted."})
+    except Exception as e:
+        print(f"[delete_custom_topic] Error: {e}")
+        return jsonify({"error": "Failed to delete the custom topic and its history."}), 500
+
+
+# ── API: DYNAMIC CONTENT & TOOLS ───────────────────────────────────────────────
+@app.route("/create_custom_topic", methods=["POST"])
+def create_custom_topic():
+    data = request.get_json()
+    user_id, topic_title = data.get("user_id"), data.get("topic_title")
+    if not all([user_id, topic_title]): return jsonify({"error": "User ID and topic title are required."}), 400
+    
+    try:
+        user_doc = db.collection("Users").document(user_id).get()
+        learning_style = user_doc.to_dict().get("learningStyle") or "The Mentor"
+    except Exception: learning_style = "The Mentor"
+
+    prompt = f'You are an expert educator and trainer. Create a complete lesson about "{topic_title}". The lesson should be comprehensive and well-structured. Teach in the "{learning_style}" voice. **OUTPUT REQUIREMENTS (pure JSON):** {{"lesson_html": "<string - raw HTML>", "quiz_questions": [{{ "question": "<string>", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "explanation": "<string>" }}]}}'
+    
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(prompt)
+        raw_text = _strip_fences(response.text)
+        
+        try:
+            lesson_content = _normalise_ai_json(json.loads(raw_text))
+        except json.JSONDecodeError:
+            print(f"[create_custom_topic] FAILED TO PARSE AI RESPONSE. AI likely returned an error page or non-JSON text.")
+            print(f"RAW AI RESPONSE WAS: {raw_text}")
+            return jsonify({"error": "The AI was unable to generate this topic, possibly due to safety filters or an internal error. Please try a different topic."}), 500
+
+    except Exception as e:
+        print(f"[create_custom_topic] AI generation error: {e}")
+        return jsonify({"error": "An unexpected error occurred while generating the topic."}), 500
+        
+    if not lesson_content.get("lesson_html"): return jsonify({"error": "AI failed to generate lesson content."}), 500
+
+    try:
+        # Use a batch to perform both writes at once
+        batch = db.batch()
+        
+        # 1. Create the master topic document
+        doc_id = re.sub(r'[^a-z0-9]+', '-', topic_title.lower()).strip('-')
+        master_ref = db.collection("ContentMaster").document(doc_id)
+        source_doc_data = {
+            "title": topic_title,
+            "ai_generated": True,
+            "date_updated": firestore.SERVER_TIMESTAMP,
+            "lesson_content": lesson_content
+        }
+        batch.set(master_ref, source_doc_data)
+        
+        # 2. Create the first lesson_attempt document
+        attempt_ref = db.collection("Users").document(user_id).collection("lesson_attempts").document()
+        attempt_data = {
+            "lesson_id": doc_id, 
+            "title": topic_title, 
+            "learning_style": learning_style,
+            "started_at": firestore.SERVER_TIMESTAMP, 
+            "status": "in-progress",
+            "lesson_content": lesson_content, 
+            "user_answers": {}, 
+            "score": None,
+            "questions_total": len(lesson_content.get("quiz_questions", []))
+        }
+        batch.set(attempt_ref, attempt_data)
+        
+        # 3. Commit both writes to the database
+        batch.commit()
+        
+        # 4. Return everything the frontend needs in one go
+        return jsonify({
+            "lesson_id": doc_id,
+            "attempt_id": attempt_ref.id,
+            "content": lesson_content
+        })
+    except Exception as e:
+        print(f"[create_custom_topic] Firestore save error: {e}")
+        return jsonify({"error": "Could not save new custom topic."}), 500
+    
+@app.route("/generate_flashcards_lesson", methods=["POST"])
+def generate_flashcards_lesson():
+    data = request.get_json()
+    user_id, attempt_id, count = data.get("user_id"), data.get("attempt_id"), data.get("count", 10)
+    if not all([user_id, attempt_id]): return jsonify({"error": "User and Attempt ID required."}), 400
+    try:
+        attempt_doc = db.collection("Users").document(user_id).collection("lesson_attempts").document(attempt_id).get()
+        if not attempt_doc.exists: return jsonify({"error": "Lesson attempt not found."}), 404
+        lesson_context = attempt_doc.to_dict().get("lesson_content", {}).get("lesson_html", "")
+        
+        prompt = f'Based on the following lesson, generate exactly {count} flashcards as a JSON array. Each object must have a "question" and "answer" key. Output only the raw JSON array. ### LESSON: {lesson_context}'
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(prompt)
+
+        # --- THIS IS THE FIX ---
+        # Add robust error handling in case the AI returns an HTML error page.
+        try:
+            cards = json.loads(_strip_fences(response.text))
+        except json.JSONDecodeError:
+            print(f"[generate_flashcards_lesson] FAILED TO PARSE AI RESPONSE.")
+            print(f"RAW AI RESPONSE WAS: {response.text}")
+            return jsonify({"error": "The AI was unable to generate flashcards from this content."}), 500
+        
+        return jsonify({"cards": cards})
+    except Exception as e:
+        print(f"[generate_flashcards_lesson] Error: {e}")
+        return jsonify({"error": "Failed to generate flashcards from lesson."}), 500
+@app.route("/generate_flashcards_topics", methods=["POST"])
+def generate_flashcards_topics():
+    data = request.get_json()
+    topic_ids, count = data.get("topic_ids"), data.get("count", 20)
+    if not topic_ids: return jsonify({"error": "At least one Topic ID is required."}), 400
+    
+    all_content = []
+    for topic_id in topic_ids:
+        doc = db.collection("ContentMaster").document(topic_id).get()
+        if doc.exists: all_content.append(doc.to_dict())
+
+    if not all_content: return jsonify({"error": "No content found for topics."}), 404
+    
+    prompt = f'Based on the following combined lesson material, generate {count} flashcards as a JSON array. Each object must have a "question" and "answer" key. Output only the raw JSON array. ### MATERIAL: {json.dumps(all_content)}'
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(prompt)
+        cards = json.loads(_strip_fences(response.text))
+        return jsonify({"cards": cards})
+    except Exception as e:
+        print(f"[generate_flashcards_topics] Error: {e}")
+        return jsonify({"error": "Failed to generate flashcards from topics."}), 500
+
+@app.route("/export_flashcards", methods=["POST"])
+def export_flashcards():
+    data = request.get_json()
+    file_format, title, cards = data.get("format"), data.get("title"), data.get("cards")
+    if not all([file_format, title, cards]): return jsonify({"error": "Format, title, and cards are required."}), 400
+    
+    if file_format == "xlsx":
+        output = io.BytesIO()
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Flashcards"
+        sheet.append(["Question", "Answer"])
+        for card in cards:
+            sheet.append([card.get("question", ""), card.get("answer", "")])
+        workbook.save(output)
+        output.seek(0)
+        return send_file(output, as_attachment=True, download_name=f"{title}.xlsx", mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+    elif file_format == "pdf":
+        output = io.BytesIO()
+        pdf = FPDF(font_cache_dir=None)
+        pdf.add_page()
+        pdf.set_font("Helvetica", size=12)
+        
+        for i, card in enumerate(cards):
+            question = card.get("question", "")
+            answer = card.get("answer", "")
+            
+            pdf.set_font("Helvetica", 'B', 12)
+            # THIS IS THE FIX: The `new_x="LMARGIN"` parameter tells the library it's
+            # okay to break long words if necessary, preventing the crash.
+            pdf.multi_cell(0, 10, f"Q{i+1}: {question}", new_x="LMARGIN", new_y="NEXT")
+            
+            pdf.set_font("Helvetica", '', 12)
+            pdf.multi_cell(0, 10, f"A: {answer}", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(5)
+
+        pdf_bytes = pdf.output()
+        output.write(pdf_bytes)
+        output.seek(0)
+        return send_file(output, as_attachment=True, download_name=f"{title}.pdf", mimetype='application/pdf')
+
+    return jsonify({"error": "Unsupported format"}), 400
 
 # ── API: FINAL CUMULATIVE QUIZ (STATEFUL) ────────────────────────────────────────
 @app.route("/generate_final_quiz", methods=["POST"])

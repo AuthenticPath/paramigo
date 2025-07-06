@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 const allowedExtensions = [".js", ".json", ".html", ".css", ".md", ".py"];
-const ignoredDirs = ["node_modules", ".git"];
+const ignoredDirs = ["node_modules", "venv", "__pycache__", ".git"];
 const ignoredFiles = [
   "exportProject.js",
   "client_secret.json",

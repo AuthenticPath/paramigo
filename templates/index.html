@@ -1,76 +1,29 @@
 <!-- FILE: templates/index.html -->
-
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Paramigo</title>
+
+    <!-- Global style sheet (modernised in the next step) -->
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='style.css') }}"
     />
-    <style>
-      .lesson-item-indicator {
-        font-size: 0.8em;
-        font-weight: bold;
-        color: #28a745;
-        margin-left: 10px;
-      }
-      .attempt-item {
-        background-color: #f9f9f9;
-        border: 1px solid #eee;
-        padding: 1em;
-        margin-bottom: 0.5em;
-        border-radius: 5px;
-        cursor: pointer;
-      }
-      .attempt-item:hover {
-        background-color: #f1f1f1;
-      }
-      .results-actions {
-        margin-top: 2em;
-        padding-top: 1em;
-        border-top: 1px solid #eee;
-        display: flex;
-        gap: 1em;
-        flex-wrap: wrap;
-      }
-      .results-actions .delete-btn {
-        background-color: #dc3545;
-      }
-      .results-actions .delete-btn:hover {
-        background-color: #c82333;
-      }
-      .lesson-accordion summary {
-        cursor: pointer;
-        font-weight: bold;
-        color: #0056b3;
-        margin: 1em 0;
-      }
-      .smart-focus-prompt button {
-        margin-top: 1em;
-      }
-      .smart-focus-prompt ul {
-        list-style-type: disc;
-        padding-left: 20px;
-      }
-      .smart-focus-prompt li {
-        margin-bottom: 0.5em;
-      }
-      #final-quiz-history-list .attempt-item {
-        background-color: #e6f7ff;
-      }
-    </style>
   </head>
+
   <body>
+    <!-- ───── LOGIN GATE ─────────────────────────────────────────────── -->
     <div id="login-container" class="page-container">
       <h1>Welcome to Paramigo</h1>
       <p>Please sign in to continue.</p>
       <button id="login-btn">Sign in with Google</button>
     </div>
 
+    <!-- ───── MAIN APP SHELL ──────────────────────────────────────────── -->
     <div id="app-container" style="display: none">
+      <!-- Top bar -->
       <header class="page-container" style="padding-bottom: 0">
         <p>
           Hello, <span id="user-name"></span>!
@@ -81,22 +34,47 @@
         </p>
       </header>
 
-      <main id="lesson-library-view" class="page-container"></main>
+      <!-- Library / Topics -->
+      <main id="lesson-library-view" class="page-container">
+        <!-- Controls injected immediately for convenience -->
+        <div class="library-controls" style="margin-bottom: 1em">
+          <button id="create-topic-btn" class="btn-primary">
+            + Create Topic
+          </button>
+          <button id="library-flashcards-btn" class="btn-outline">
+            Generate Flashcards
+          </button>
+          <button id="final-quiz-button" class="btn-outline">
+            Take a Final Quiz
+          </button>
+        </div>
+
+        <!-- Topic list & history will be rendered by JS -->
+        <div id="library-dynamic-area"></div>
+      </main>
+
+      <!-- Topic detail -->
       <main
         id="topic-detail-view"
         class="page-container"
         style="display: none"
       ></main>
+
+      <!-- Active lesson -->
       <main
         id="lesson-taking-view"
         class="page-container"
         style="display: none"
       ></main>
+
+      <!-- Results / review -->
       <main
         id="results-view"
         class="page-container"
         style="display: none"
       ></main>
+
+      <!-- Final quiz workflow -->
       <main
         id="final-quiz-view"
         class="page-container"
@@ -104,9 +82,11 @@
       ></main>
     </div>
 
+    <!-- ───── FLOATING AI-TUTOR CHAT ──────────────────────────────────── -->
     <button id="tutor-button" style="display: none" onclick="toggleTutor()">
       Ask Tutor 💬
     </button>
+
     <div id="tutor-chat-container">
       <div id="tutor-chat-header">
         <span>AI Tutor</span>
@@ -119,6 +99,7 @@
       </div>
     </div>
 
+    <!-- ───── FINAL-QUIZ TOPIC-PICKER MODAL ───────────────────────────── -->
     <div id="final-quiz-modal" class="modal-backdrop">
       <div class="modal-content">
         <h2>Create a Cumulative Quiz</h2>
@@ -126,6 +107,7 @@
           Select the topics you want to include and the total number of
           questions for your quiz.
         </p>
+
         <div
           style="
             margin-bottom: 1em;
@@ -138,9 +120,11 @@
             <strong>Select All / Deselect All</strong>
           </label>
         </div>
+
         <div id="topic-selection-list">
-          <!-- Checkboxes will be populated by JS -->
+          <!-- Topic check-boxes injected by JS -->
         </div>
+
         <div>
           <label for="question-count-input">Number of Questions:</label>
           <input
@@ -152,6 +136,7 @@
             style="width: 60px"
           />
         </div>
+
         <div style="margin-top: 2em">
           <button id="generate-final-quiz-btn">Generate Quiz</button>
           <button id="cancel-final-quiz-btn" style="background-color: #6c757d">
@@ -161,736 +146,48 @@
       </div>
     </div>
 
-    <script type="module">
-      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-      import {
-        getAuth,
-        onAuthStateChanged,
-        GoogleAuthProvider,
-        signInWithPopup,
-        signOut,
-      } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+    <!-- ───── FLASHCARD TOPIC-PICKER MODAL ────────────────────────── -->
+    <div id="flashcard-topic-modal" class="modal-backdrop">
+      <div class="modal-content">
+        <h2>Generate Flashcards</h2>
+        <p>Select the topics you want to include in your flashcard deck.</p>
 
-      // --- Firebase Config ---
-      const firebaseConfig = {
-        apiKey: "AIzaSyB4EJ5fu2ZGn3YG6NerCZRHfLj3F1mvpww",
-        authDomain: "paramigo-tool-03.firebaseapp.com",
-        projectId: "paramigo-tool-03",
-        storageBucket: "paramigo-tool-03.firebasestorage.app",
-        messagingSenderId: "626376082375",
-        appId: "1:626376082375:web:7b0edfa3319c258d900fe2",
-        measurementId: "G-5C44175E71",
-      };
+        <div
+          style="
+            margin-bottom: 1em;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 0.5em;
+          "
+        >
+          <label>
+            <input type="checkbox" id="select-all-flashcard-topics-checkbox" />
+            <strong>Select All / Deselect All</strong>
+          </label>
+        </div>
 
-      const app = initializeApp(firebaseConfig);
-      const auth = getAuth(app);
+        <div id="flashcard-topic-selection-list">
+          <!-- Topic check-boxes injected by JS -->
+        </div>
 
-      // --- Helpers ---
-      // Always return an *array* of option strings.
-      function normalizeOptions(optionsField) {
-        if (Array.isArray(optionsField)) return optionsField;
-        if (typeof optionsField === "string") {
-          // Split patterns like "A) Foo. B) Bar."  (fallback to commas / semicolons)
-          const matches = optionsField.match(/[A-Z]\)[^A-Z]*/g);
-          return (matches || optionsField.split(/[;,]/)).map((s) => s.trim());
-        }
-        return [];
-      }
+        <div style="margin-top: 2em">
+          <button id="generate-flashcards-btn-modal">
+            Generate Flashcards
+          </button>
+          <button
+            id="cancel-flashcards-btn-modal"
+            style="background-color: #6c757d"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
 
-      // --- Global State ---
-      let currentUser = null;
-      let currentAttemptId = null;
-      let currentLessonId = null;
-      let currentLessonContext = null;
-      let libraryData = [];
-      let currentFinalQuizQuestions = [];
-
-      const loginContainer = document.getElementById("login-container");
-      const appContainer = document.getElementById("app-container");
-      const userNameSpan = document.getElementById("user-name");
-      const views = {
-        library: document.getElementById("lesson-library-view"),
-        topicDetail: document.getElementById("topic-detail-view"),
-        lesson: document.getElementById("lesson-taking-view"),
-        results: document.getElementById("results-view"),
-        finalQuiz: document.getElementById("final-quiz-view"),
-      };
-      const tutorButton = document.getElementById("tutor-button");
-      const tutorChatContainer = document.getElementById(
-        "tutor-chat-container"
-      );
-      const tutorChatHistory = document.getElementById("tutor-chat-history");
-      const tutorInput = document.getElementById("tutor-input");
-
-      const finalQuizModal = document.getElementById("final-quiz-modal");
-      const topicSelectionList = document.getElementById(
-        "topic-selection-list"
-      );
-      const generateFinalQuizBtn = document.getElementById(
-        "generate-final-quiz-btn"
-      );
-      const cancelFinalQuizBtn = document.getElementById(
-        "cancel-final-quiz-btn"
-      );
-      const questionCountInput = document.getElementById(
-        "question-count-input"
-      );
-      const selectAllTopicsCheckbox = document.getElementById(
-        "select-all-topics-checkbox"
-      );
-
-      // --- View Helpers ---
-      function showView(viewName) {
-        Object.values(views).forEach((v) => (v.style.display = "none"));
-        views[viewName].style.display = "block";
-        tutorButton.style.display =
-          viewName === "lesson" || viewName === "results" ? "block" : "none";
-        window.scrollTo(0, 0);
-      }
-      window.showView = showView;
-
-      // --- Initialisation & Library Rendering ---
-      async function initializeAppForUser(user) {
-        currentUser = user;
-        const response = await fetch("/get_library_and_history", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_id: currentUser.uid }),
-        });
-        const data = await response.json();
-        libraryData = data.library;
-        const finalQuizHistory = data.final_quiz_history || [];
-
-        const finalQuizHistoryHtml =
-          finalQuizHistory.length > 0
-            ? `
-            <div id="final-quiz-history" style="margin-top: 2em;">
-                <h3>Final Quiz History</h3>
-                <ul id="final-quiz-history-list">${finalQuizHistory
-                  .map(
-                    (h) => `
-                    <li class="attempt-item" onclick="reviewFinalQuiz('${
-                      h.attempt_id
-                    }')">
-                        <strong>${h.title}</strong><br>
-                        Score: ${
-                          h.score !== null
-                            ? `${h.score}/${h.questions_total}`
-                            : "In Progress"
-                        }<br>
-                        <small>Taken on: ${new Date(
-                          h.started_at
-                        ).toLocaleString()}</small>
-                    </li>
-                `
-                  )
-                  .join("")}</ul>
-            </div>
-        `
-            : "";
-
-        views.library.innerHTML = `
-            <h2>Lesson Library</h2>
-            <p>Select a topic to begin or review your history.</p>
-            <ul id="lesson-list">${libraryData
-              .map((topic) => {
-                const startedIndicator =
-                  topic.attempts.length > 0
-                    ? '<span class="lesson-item-indicator">✔ Started</span>'
-                    : "";
-                return `<li class="lesson-item" onclick="showTopicDetail('${topic.id}')">${topic.title} ${startedIndicator}</li>`;
-              })
-              .join("")}</ul>
-            <button id="final-quiz-button">Take a Final Quiz</button>
-            ${finalQuizHistoryHtml}
-        `;
-        document
-          .getElementById("final-quiz-button")
-          .addEventListener("click", showFinalQuizModal);
-        showView("library");
-      }
-
-      function showTopicDetail(topicId) {
-        currentLessonId = topicId;
-        const topic = libraryData.find((t) => t.id === topicId);
-        if (!topic) return;
-        let historyHtml =
-          topic.attempts.length > 0
-            ? topic.attempts
-                .map(
-                  (h) => `
-            <li class="attempt-item" onclick="reviewLesson('${h.attempt_id}')">
-                <strong>${h.title}</strong><br>
-                Score: ${
-                  h.score !== null
-                    ? `${h.score}/${h.questions_total}`
-                    : "In Progress"
-                }
-                <br>
-                <small>Taken on: ${new Date(
-                  h.started_at
-                ).toLocaleString()}</small>
-            </li>`
-                )
-                .join("")
-            : "<p>You have no history for this topic yet.</p>";
-        views.topicDetail.innerHTML = `
-            <button onclick="showView('library')">← Back to Library</button>
-            <h2 style="margin-top: 1em;">${topic.title}</h2>
-            <button onclick="startLesson('${topic.id}')">Start New Attempt</button>
-            <hr style="margin: 2em 0;">
-            <h3>Your Previous Attempts</h3>
-            <ul>${historyHtml}</ul>`;
-        showView("topicDetail");
-      }
-      window.showTopicDetail = showTopicDetail;
-
-      // --- Lesson Attempt Flow ---
-      async function startLesson(lessonId, originalAttemptId = null) {
-        views.lesson.innerHTML =
-          "<h2>Loading Lesson...</h2><p>Please wait...</p>";
-        showView("lesson");
-        try {
-          const payload = { user_id: currentUser.uid, lesson_id: lessonId };
-          if (originalAttemptId)
-            payload.original_attempt_id = originalAttemptId;
-          const response = await fetch("/start_lesson", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          currentAttemptId = data.attempt_id;
-          currentLessonId = data.lesson_id;
-          currentLessonContext = data.content;
-          renderLessonTakingView(data.content);
-        } catch (error) {
-          views.lesson.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.startLesson = startLesson;
-
-      async function startMultiConceptLesson(concepts, parentLessonId) {
-        views.lesson.innerHTML =
-          "<h2>Generating Focused Lesson...</h2><p>Synthesizing a new lesson based on your weak points, please wait...</p>";
-        showView("lesson");
-        try {
-          const response = await fetch("/start_multi_concept_lesson", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              concepts: concepts,
-              parent_lesson_id: parentLessonId,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          currentAttemptId = data.attempt_id;
-          currentLessonId = data.lesson_id;
-          currentLessonContext = data.content;
-          renderLessonTakingView(data.content);
-        } catch (error) {
-          views.lesson.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.startMultiConceptLesson = startMultiConceptLesson;
-
-      async function submitQuiz() {
-        const form = document.getElementById("quiz-form");
-        const formData = new FormData(form);
-        const userAnswers = Object.fromEntries(formData.entries());
-        views.results.innerHTML = "<h2>Scoring Quiz...</h2>";
-        showView("results");
-        try {
-          const response = await fetch("/submit_quiz", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              attempt_id: currentAttemptId,
-              user_answers: userAnswers,
-              lesson_id: currentLessonId,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          currentLessonContext = data.content;
-          renderResultsView(data, currentAttemptId);
-        } catch (error) {
-          views.results.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.submitQuiz = submitQuiz;
-
-      async function reviewLesson(attemptId) {
-        views.results.innerHTML = "<h2>Loading History...</h2>";
-        showView("results");
-        try {
-          const response = await fetch("/get_lesson_attempt", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              attempt_id: attemptId,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          currentLessonContext = data.content;
-          currentLessonId = data.lesson_id;
-          renderResultsView(data, attemptId);
-        } catch (error) {
-          views.results.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.reviewLesson = reviewLesson;
-
-      async function deleteAttempt(attemptId, lessonId) {
-        if (
-          !confirm("Are you sure you want to permanently delete this attempt?")
-        )
-          return;
-        try {
-          await fetch("/delete_attempt", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              attempt_id: attemptId,
-            }),
-          });
-          await initializeAppForUser(currentUser);
-          showTopicDetail(lessonId);
-        } catch (error) {
-          alert("Error deleting attempt: " + error.message);
-        }
-      }
-      window.deleteAttempt = deleteAttempt;
-
-      // --- Renderers ---
-      function renderLessonTakingView(content) {
-        const shuffledQuestions = [...content.quiz_questions].sort(
-          () => Math.random() - 0.5
-        );
-
-        const quizHtml = shuffledQuestions
-          .map((q, index) => {
-            const originalIndex = content.quiz_questions.indexOf(q);
-
-            // ✅ Ensure options is an array
-            const optionsArray = normalizeOptions(q.options);
-
-            const optionsHtml = optionsArray
-              .map(
-                (option, optIndex) =>
-                  `<label><input type="radio" name="${originalIndex}" value="${optIndex}" required><span>${option}</span></label>`
-              )
-              .join("");
-
-            return `<div class="quiz-question"><h4>${index + 1}. ${
-              q.question
-            }</h4><div class="quiz-options">${optionsHtml}</div></div>`;
-          })
-          .join("");
-
-        views.lesson.innerHTML = `
-            <div>${content.lesson_html}</div>
-            <form id="quiz-form"><h3>Check Your Understanding</h3>${quizHtml}<button type="button" onclick="submitQuiz()">Submit & Score My Quiz</button></form>
-            <button class="back-to-library" onclick="showTopicDetail('${currentLessonId}')" style="margin-top: 1em; background-color: #6c757d;">Cancel and Go Back</button>`;
-      }
-
-      function renderResultsView(data, attemptId) {
-        const {
-          lesson_id,
-          content,
-          user_answers,
-          score,
-          questions_total,
-          smart_focus,
-        } = data;
-        let lessonAccordionHtml = `<details class="lesson-accordion"><summary>Click to review original lesson</summary><div>${content.lesson_html}</div></details>`;
-        let resultsHtml =
-          `<h2>Reviewing: ${content.title || "Lesson"}</h2>` +
-          lessonAccordionHtml +
-          `<hr style="margin: 2em 0;" /><div id="quiz-anchor"></div><div class="results-summary"><h3>Your Score: ${score} / ${questions_total}</h3></div>`;
-        resultsHtml += content.quiz_questions
-          .map((q, index) => {
-            const userAnswer = user_answers[String(index)];
-
-            // ✅ Ensure options is an array
-            const optionsArray = normalizeOptions(q.options);
-
-            const optionsHtml = optionsArray
-              .map((option, optIndex) => {
-                let className = "option",
-                  icon = "⚪";
-                if (optIndex === q.correct_answer_index) {
-                  className += " correct";
-                  icon = "✅";
-                } else if (String(optIndex) === userAnswer) {
-                  className += " incorrect-selection";
-                  icon = "❌";
-                }
-                return `<div class="${className}"><span class="icon">${icon}</span> ${option}</div>`;
-              })
-              .join("");
-            return `<div class="results-question"><h4>${index + 1}. ${
-              q.question
-            }</h4><div class="results-options">${optionsHtml}</div><div class="explanation"><strong>Explanation:</strong> ${
-              q.explanation
-            }</div></div>`;
-          })
-          .join("");
-
-        if (
-          smart_focus &&
-          smart_focus.smart_focus_needed &&
-          smart_focus.missed_concepts.length > 0
-        ) {
-          const conceptsHtmlList = smart_focus.missed_concepts
-            .map((concept) => `<li><strong>${concept}</strong></li>`)
-            .join("");
-
-          resultsHtml += `
-                <div class="smart-focus-prompt">
-                    <h3>💡 Smart Focus Opportunity</h3>
-                    <p>It looks like you had some trouble with the following concepts:</p>
-                    <ul>${conceptsHtmlList}</ul>
-                    <hr>
-                    <p><strong>Here's a quick refresher:</strong> ${smart_focus.explanation}</p>
-                    <button id="generate-focus-lesson-btn">Generate a lesson on these concepts</button>
-                </div>`;
-        }
-
-        resultsHtml += `
-            <div class="results-actions">
-                <button onclick="showTopicDetail('${lesson_id}')">← Back to Topic</button>
-                <button onclick="startLesson('${lesson_id}', '${attemptId}')">Retake Quiz</button>
-                <button class="delete-btn" onclick="deleteAttempt('${attemptId}', '${lesson_id}')">Delete This Attempt</button>
-            </div>`;
-
-        views.results.innerHTML = resultsHtml;
-
-        const generateBtn = document.getElementById(
-          "generate-focus-lesson-btn"
-        );
-        if (generateBtn) {
-          generateBtn.addEventListener("click", () => {
-            startMultiConceptLesson(smart_focus.missed_concepts, lesson_id);
-          });
-        }
-
-        document.getElementById("quiz-anchor")?.scrollIntoView();
-      }
-
-      // --- Auth Controls ---
-      document
-        .getElementById("login-btn")
-        .addEventListener("click", () =>
-          signInWithPopup(auth, new GoogleAuthProvider())
-        );
-      document.getElementById("logout-btn").addEventListener("click", (e) => {
-        e.preventDefault();
-        signOut(auth);
-      });
-      onAuthStateChanged(auth, async (user) => {
-        loginContainer.style.display = user ? "none" : "block";
-        appContainer.style.display = user ? "block" : "none";
-        if (user) {
-          const response = await fetch("/create_user", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              uid: user.uid,
-              displayName: user.displayName,
-              email: user.email,
-            }),
-          });
-          const userData = await response.json();
-          if (userData.needs_onboarding) {
-            window.location.href = "/onboarding";
-            return;
-          }
-          userNameSpan.innerText = user.displayName || "User";
-          initializeAppForUser(user);
-        } else {
-          currentUser = null;
-          libraryData = [];
-        }
-      });
-
-      // --- Final Quiz Logic (unchanged except for earlier normalisation already present) ---
-      function showFinalQuizModal() {
-        topicSelectionList.innerHTML = libraryData
-          .map(
-            (topic) => `
-            <label>
-                <input type="checkbox" name="final-quiz-topic" value="${topic.id}">
-                ${topic.title}
-            </label>
-        `
-          )
-          .join("");
-        finalQuizModal.style.display = "flex";
-      }
-
-      function hideFinalQuizModal() {
-        finalQuizModal.style.display = "none";
-      }
-
-      async function generateFinalQuiz() {
-        const selectedTopics = Array.from(
-          document.querySelectorAll('input[name="final-quiz-topic"]:checked')
-        ).map((cb) => cb.value);
-        const questionCount = parseInt(questionCountInput.value, 10);
-
-        if (selectedTopics.length < 1) {
-          alert("Please select at least one topic for the quiz.");
-          return;
-        }
-        if (questionCount < 5 || questionCount > 20) {
-          alert("Please request between 5 and 20 questions.");
-          return;
-        }
-
-        hideFinalQuizModal();
-        views.finalQuiz.innerHTML = `<h2>Generating Final Quiz...</h2><p>Please wait while we create your cumulative quiz from the selected topics.</p>`;
-        showView("finalQuiz");
-
-        try {
-          const response = await fetch("/generate_final_quiz", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              topic_ids: selectedTopics,
-              question_count: questionCount,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          currentAttemptId = data.attempt_id;
-          currentFinalQuizQuestions = data.quiz_questions;
-          renderFinalQuizView(currentFinalQuizQuestions);
-        } catch (error) {
-          views.finalQuiz.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-
-      function renderFinalQuizView(questions) {
-        const shuffledQuestions = [...questions].sort(
-          () => Math.random() - 0.5
-        );
-        const quizHtml = shuffledQuestions
-          .map((q, index) => {
-            const originalIndex = questions.indexOf(q);
-
-            // Already normalised earlier
-            const optionsArray = normalizeOptions(q.options);
-
-            const optionsHtml = optionsArray
-              .map(
-                (option, optIndex) =>
-                  `<label><input type="radio" name="${originalIndex}" value="${optIndex}" required><span>${option}</span></label>`
-              )
-              .join("");
-
-            return `<div class="quiz-question"><h4>${index + 1}. ${
-              q.question
-            }</h4><div class="quiz-options">${optionsHtml}</div></div>`;
-          })
-          .join("");
-
-        views.finalQuiz.innerHTML = `
-            <h2>Cumulative Final Quiz</h2>
-            <form id="final-quiz-form">
-                ${quizHtml}
-                <button type="button" onclick="submitFinalQuiz()">Submit Final Quiz</button>
-            </form>
-            <button class="back-to-library" onclick="showView('library')" style="margin-top: 1em; background-color: #6c757d;">Cancel and Go Back</button>`;
-      }
-      window.renderFinalQuizView = renderFinalQuizView;
-
-      async function submitFinalQuiz() {
-        const form = document.getElementById("final-quiz-form");
-        const formData = new FormData(form);
-        const userAnswers = Object.fromEntries(formData.entries());
-
-        views.finalQuiz.innerHTML = "<h2>Scoring Final Quiz...</h2>";
-        showView("finalQuiz");
-
-        try {
-          const response = await fetch("/submit_final_quiz", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              attempt_id: currentAttemptId,
-              user_answers: userAnswers,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          renderFinalQuizResults(data, currentAttemptId);
-        } catch (error) {
-          views.finalQuiz.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.submitFinalQuiz = submitFinalQuiz;
-
-      function renderFinalQuizResults(data, attemptId) {
-        const { user_answers, score, questions_total, quiz_questions, title } =
-          data;
-        let resultsHtml = `
-            <h2>Final Quiz Results: ${title}</h2>
-            <div class="results-summary"><h3>Your Score: ${score} / ${questions_total}</h3></div>
-        `;
-        resultsHtml += quiz_questions
-          .map((q, index) => {
-            const userAnswer = user_answers[String(index)];
-
-            const optionsArray = normalizeOptions(q.options);
-
-            const optionsHtml = optionsArray
-              .map((option, optIndex) => {
-                let className = "option",
-                  icon = "⚪";
-                if (optIndex === q.correct_answer_index) {
-                  className += " correct";
-                  icon = "✅";
-                } else if (String(optIndex) === userAnswer) {
-                  className += " incorrect-selection";
-                  icon = "❌";
-                }
-                return `<div class="${className}"><span class="icon">${icon}</span> ${option}</div>`;
-              })
-              .join("");
-
-            return `<div class="results-question"><h4>${index + 1}. ${
-              q.question
-            }</h4><div class="results-options">${optionsHtml}</div><div class="explanation"><strong>Explanation:</strong> ${
-              q.explanation
-            }</div></div>`;
-          })
-          .join("");
-
-        resultsHtml += `
-            <div class="results-actions">
-                <button onclick="showView('library')">← Back to Library</button>
-                <button onclick="retakeFinalQuiz('${attemptId}')">Retake This Quiz</button>
-            </div>`;
-        views.finalQuiz.innerHTML = resultsHtml;
-        window.scrollTo(0, 0);
-      }
-      window.renderFinalQuizResults = renderFinalQuizResults;
-
-      async function reviewFinalQuiz(attemptId) {
-        views.finalQuiz.innerHTML = "<h2>Loading Final Quiz History...</h2>";
-        showView("finalQuiz");
-        try {
-          const response = await fetch("/get_final_quiz_attempt", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              attempt_id: attemptId,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          renderFinalQuizResults(data, attemptId);
-        } catch (error) {
-          views.finalQuiz.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.reviewFinalQuiz = reviewFinalQuiz;
-
-      async function retakeFinalQuiz(originalAttemptId) {
-        views.finalQuiz.innerHTML = `<h2>Reloading Quiz...</h2><p>Please wait.</p>`;
-        showView("finalQuiz");
-        try {
-          const response = await fetch("/retake_final_quiz", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              original_attempt_id: originalAttemptId,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          currentAttemptId = data.attempt_id;
-          currentFinalQuizQuestions = data.quiz_questions;
-          renderFinalQuizView(currentFinalQuizQuestions);
-        } catch (error) {
-          views.finalQuiz.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.retakeFinalQuiz = retakeFinalQuiz;
-
-      generateFinalQuizBtn.addEventListener("click", generateFinalQuiz);
-      cancelFinalQuizBtn.addEventListener("click", hideFinalQuizModal);
-
-      selectAllTopicsCheckbox.addEventListener("change", (event) => {
-        const checkboxes = document.querySelectorAll(
-          'input[name="final-quiz-topic"]'
-        );
-        checkboxes.forEach((checkbox) => {
-          checkbox.checked = event.target.checked;
-        });
-      });
-
-      // --- Tutor Logic ---
-      function toggleTutor() {
-        const isHidden =
-          tutorChatContainer.style.display === "none" ||
-          tutorChatContainer.style.display === "";
-        tutorChatContainer.style.display = isHidden ? "flex" : "none";
-      }
-      window.toggleTutor = toggleTutor;
-
-      function addMessageToHistory(message, type) {
-        const messageDiv = document.createElement("div");
-        messageDiv.className = `chat-message ${type}-message`;
-        messageDiv.innerText = message;
-        tutorChatHistory.appendChild(messageDiv);
-        tutorChatHistory.scrollTop = tutorChatHistory.scrollHeight;
-      }
-      window.addMessageToHistory = addMessageToHistory;
-
-      async function sendTutorMessage() {
-        const question = tutorInput.value.trim();
-        if (!question || !currentLessonContext) return;
-        addMessageToHistory(question, "user");
-        tutorInput.value = "";
-        addMessageToHistory("Typing...", "tutor");
-        try {
-          const response = await fetch("/ask_tutor", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              question: question,
-              context: JSON.stringify(currentLessonContext),
-            }),
-          });
-          const data = await response.json();
-          tutorChatHistory.removeChild(tutorChatHistory.lastChild);
-          addMessageToHistory(data.answer, "tutor");
-        } catch (error) {
-          tutorChatHistory.removeChild(tutorChatHistory.lastChild);
-          addMessageToHistory("Sorry, I had trouble connecting.", "tutor");
-        }
-      }
-      window.sendTutorMessage = sendTutorMessage;
-
-      tutorInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          sendTutorMessage();
-        }
-      });
-    </script>
+    <!-- ───── APP SCRIPTS ─────────────────────────────────────────────── -->
+    <!-- All interactive logic now lives in static/js/main.js -->
+    <script
+      type="module"
+      src="{{ url_for('static', filename='js/main.js') }}"
+    ></script>
   </body>
 </html>

@@ -1,4 +1,4 @@
---- ReadMe.md ---
+--- README.md ---
 # Paramigo Project Summary & State
 
 **Date:** June 23, 2025
@@ -126,11 +126,14 @@ The most critical lesson learned during development has been the need for a resi
 --- app.py ---
 # FILE: app.py
 
-import os, json, re
-from flask import Flask, render_template, jsonify, request
+import os, json, re, io
+from flask import Flask, render_template, jsonify, request, send_file
 from google.cloud import firestore
 from dotenv import load_dotenv
 import google.generativeai as genai
+from openpyxl import Workbook
+from fpdf import FPDF
+
 
 # ── CONFIG ───────────────────────────────────────────────────────────────────────
 load_dotenv()
@@ -161,6 +164,8 @@ def onboarding():
     return render_template("onboarding.html", styles=styles)
 
 # ── API: DATA LOADING ────────────────────────────────────────────────────────────
+# THIS IS THE REPLACEMENT FOR THE ENTIRE get_library_and_history FUNCTION
+
 @app.route("/get_library_and_history", methods=["POST"])
 def get_library_and_history():
     data = request.get_json()
@@ -177,17 +182,23 @@ def get_library_and_history():
             history_by_lesson[lesson_id] = []
         history_by_lesson[lesson_id].append({"attempt_id": doc.id, "title": d.get("title"), "score": d.get("score"), "questions_total": d.get("questions_total"), "started_at": d.get("started_at").isoformat()})
     
-    # Fetch the main library content
+    # Fetch the main library content and separate it
     library_docs = db.collection("ContentMaster").stream()
-    library_with_history = []
+    official_library = []
+    user_creations = []
     for doc in library_docs:
         doc_dict = doc.to_dict()
         title = doc_dict.get("title")
         if title:
             lesson_id = doc.id
-            library_with_history.append({"id": lesson_id, "title": title, "attempts": history_by_lesson.get(lesson_id, [])})
+            lesson_data = {"id": lesson_id, "title": title, "attempts": history_by_lesson.get(lesson_id, [])}
+            # NEW: Check for the ai_generated flag
+            if doc_dict.get("ai_generated"):
+                user_creations.append(lesson_data)
+            else:
+                official_library.append(lesson_data)
 
-    # NEW: Fetch final quiz history
+    # Fetch final quiz history
     final_quiz_history = []
     final_quiz_docs = db.collection("Users").document(user_id).collection("final_quiz_attempts").order_by("started_at", direction=firestore.Query.DESCENDING).stream()
     for doc in final_quiz_docs:
@@ -199,8 +210,12 @@ def get_library_and_history():
             "questions_total": d.get("questions_total"),
             "started_at": d.get("started_at").isoformat()
         })
-
-    return jsonify({"library": library_with_history, "final_quiz_history": final_quiz_history})
+    # Return two separate lists for the library
+    return jsonify({
+        "library": official_library, 
+        "user_creations": user_creations, 
+        "final_quiz_history": final_quiz_history
+    })
 
 @app.route("/get_lesson_attempt", methods=["POST"])
 def get_lesson_attempt():
@@ -228,6 +243,20 @@ def get_lesson_attempt():
         print(f"[get_lesson_attempt] Firestore error: {e}")
         return jsonify({"error": "Could not retrieve lesson history."}), 500
 
+@app.route("/get_source_material", methods=["POST"])
+def get_source_material():
+    data = request.get_json()
+    lesson_id = data.get("lesson_id")
+    if not lesson_id: return jsonify({"error": "Lesson ID is required."}), 400
+    try:
+        doc_ref = db.collection("ContentMaster").document(lesson_id)
+        doc = doc_ref.get()
+        if not doc.exists: return jsonify({"error": "Source material not found"}), 404
+        return jsonify(doc.to_dict())
+    except Exception as e:
+        print(f"[get_source_material] Firestore error: {e}")
+        return jsonify({"error": "Could not retrieve source material."}), 500
+
 # ── USER/PROFILE API ─────────────────────────────────────────────────────────────
 @app.route("/create_user", methods=["POST"])
 def create_user():
@@ -254,7 +283,6 @@ def save_preference():
         print(f"[save_preference] Firestore error: {e}")
         return jsonify({"status": "error", "message": "Could not save preference."}), 500
 
-# ── API: THE NEW LEARNING FLOW ───────────────────────────────────────────────────
 @app.route("/start_lesson", methods=["POST"])
 def start_lesson():
     data = request.get_json()
@@ -280,9 +308,26 @@ def start_lesson():
         source_doc_ref = db.collection("ContentMaster").document(lesson_id)
         source_doc = source_doc_ref.get()
         if not source_doc.exists: return jsonify({"error": "Lesson not found."}), 404
-        source_content = source_doc.to_dict()
-        source_title = source_content.get("title")
-        prompt = f'You are an expert financial trainer. Teach in the "{learning_style}" voice. **OUTPUT REQUIREMENTS (pure JSON):** {{"lesson_html": "<string - raw HTML>", "quiz_questions": [{{ "question": "<string>", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "explanation": "<string>" }}]}} # SOURCE MATERIAL: {json.dumps(source_content, ensure_ascii=False)}'
+        
+        source_content_full = source_doc.to_dict()
+        source_title = source_content_full.get("title")
+
+        def datetime_converter(o):
+            if isinstance(o, firestore.firestore.DatetimeWithNanoseconds):
+                return o.isoformat()
+            raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+        # --- THIS IS THE FIX ---
+        # If the topic is AI-generated, the "source" for the new AI prompt
+        # is the content inside the 'lesson_content' field.
+        if source_content_full.get("ai_generated"):
+            source_for_prompt = source_content_full.get("lesson_content", {})
+            prompt = f'You are an expert educator and trainer. Teach in the "{learning_style}" voice using the content provided as your source material. **OUTPUT REQUIREMENTS (pure JSON):** {{"lesson_html": "<string - raw HTML>", "quiz_questions": [{{ "question": "<string>", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "explanation": "<string>" }}]}} # SOURCE MATERIAL: {json.dumps(source_for_prompt, default=datetime_converter, ensure_ascii=False)}'
+        else:
+            # For human-made topics, the entire document is the source.
+            source_for_prompt = source_content_full
+            prompt = f'You are an expert financial trainer. Teach in the "{learning_style}" voice. **OUTPUT REQUIREMENTS (pure JSON):** {{"lesson_html": "<string - raw HTML>", "quiz_questions": [{{ "question": "<string>", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "explanation": "<string>" }}]}} # SOURCE MATERIAL: {json.dumps(source_for_prompt, default=datetime_converter, ensure_ascii=False)}'
+        
         try:
             model = genai.GenerativeModel("gemini-1.5-flash")
             raw_json = model.generate_content(prompt).text
@@ -424,6 +469,204 @@ def ask_tutor():
     except Exception as e:
         print(f"[ask_tutor] AI generation error: {e}")
         return jsonify({"error": "Sorry, I had a problem generating an answer."}), 500
+    
+@app.route("/delete_custom_topic", methods=["POST"])
+def delete_custom_topic():
+    data = request.get_json()
+    user_id, topic_id = data.get("user_id"), data.get("topic_id")
+    if not all([user_id, topic_id]): 
+        return jsonify({"error": "User ID and Topic ID are required."}), 400
+
+    try:
+        # Use a transaction or a batch to ensure atomicity
+        batch = db.batch()
+
+        # 1. Delete the master document from ContentMaster
+        master_ref = db.collection("ContentMaster").document(topic_id)
+        batch.delete(master_ref)
+
+        # 2. Find and delete all lesson attempts associated with this topic for the user
+        attempts_query = db.collection("Users").document(user_id).collection("lesson_attempts").where("lesson_id", "==", topic_id)
+        for doc in attempts_query.stream():
+            batch.delete(doc.reference)
+        
+        # 3. Commit all the deletions at once
+        batch.commit()
+        
+        return jsonify({"status": "success", "message": f"Topic {topic_id} and all its attempts have been deleted."})
+    except Exception as e:
+        print(f"[delete_custom_topic] Error: {e}")
+        return jsonify({"error": "Failed to delete the custom topic and its history."}), 500
+
+
+# ── API: DYNAMIC CONTENT & TOOLS ───────────────────────────────────────────────
+@app.route("/create_custom_topic", methods=["POST"])
+def create_custom_topic():
+    data = request.get_json()
+    user_id, topic_title = data.get("user_id"), data.get("topic_title")
+    if not all([user_id, topic_title]): return jsonify({"error": "User ID and topic title are required."}), 400
+    
+    try:
+        user_doc = db.collection("Users").document(user_id).get()
+        learning_style = user_doc.to_dict().get("learningStyle") or "The Mentor"
+    except Exception: learning_style = "The Mentor"
+
+    prompt = f'You are an expert educator and trainer. Create a complete lesson about "{topic_title}". The lesson should be comprehensive and well-structured. Teach in the "{learning_style}" voice. **OUTPUT REQUIREMENTS (pure JSON):** {{"lesson_html": "<string - raw HTML>", "quiz_questions": [{{ "question": "<string>", "options": ["A", "B", "C", "D"], "correct_answer_index": 0, "explanation": "<string>" }}]}}'
+    
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(prompt)
+        raw_text = _strip_fences(response.text)
+        
+        try:
+            lesson_content = _normalise_ai_json(json.loads(raw_text))
+        except json.JSONDecodeError:
+            print(f"[create_custom_topic] FAILED TO PARSE AI RESPONSE. AI likely returned an error page or non-JSON text.")
+            print(f"RAW AI RESPONSE WAS: {raw_text}")
+            return jsonify({"error": "The AI was unable to generate this topic, possibly due to safety filters or an internal error. Please try a different topic."}), 500
+
+    except Exception as e:
+        print(f"[create_custom_topic] AI generation error: {e}")
+        return jsonify({"error": "An unexpected error occurred while generating the topic."}), 500
+        
+    if not lesson_content.get("lesson_html"): return jsonify({"error": "AI failed to generate lesson content."}), 500
+
+    try:
+        # Use a batch to perform both writes at once
+        batch = db.batch()
+        
+        # 1. Create the master topic document
+        doc_id = re.sub(r'[^a-z0-9]+', '-', topic_title.lower()).strip('-')
+        master_ref = db.collection("ContentMaster").document(doc_id)
+        source_doc_data = {
+            "title": topic_title,
+            "ai_generated": True,
+            "date_updated": firestore.SERVER_TIMESTAMP,
+            "lesson_content": lesson_content
+        }
+        batch.set(master_ref, source_doc_data)
+        
+        # 2. Create the first lesson_attempt document
+        attempt_ref = db.collection("Users").document(user_id).collection("lesson_attempts").document()
+        attempt_data = {
+            "lesson_id": doc_id, 
+            "title": topic_title, 
+            "learning_style": learning_style,
+            "started_at": firestore.SERVER_TIMESTAMP, 
+            "status": "in-progress",
+            "lesson_content": lesson_content, 
+            "user_answers": {}, 
+            "score": None,
+            "questions_total": len(lesson_content.get("quiz_questions", []))
+        }
+        batch.set(attempt_ref, attempt_data)
+        
+        # 3. Commit both writes to the database
+        batch.commit()
+        
+        # 4. Return everything the frontend needs in one go
+        return jsonify({
+            "lesson_id": doc_id,
+            "attempt_id": attempt_ref.id,
+            "content": lesson_content
+        })
+    except Exception as e:
+        print(f"[create_custom_topic] Firestore save error: {e}")
+        return jsonify({"error": "Could not save new custom topic."}), 500
+    
+@app.route("/generate_flashcards_lesson", methods=["POST"])
+def generate_flashcards_lesson():
+    data = request.get_json()
+    user_id, attempt_id, count = data.get("user_id"), data.get("attempt_id"), data.get("count", 10)
+    if not all([user_id, attempt_id]): return jsonify({"error": "User and Attempt ID required."}), 400
+    try:
+        attempt_doc = db.collection("Users").document(user_id).collection("lesson_attempts").document(attempt_id).get()
+        if not attempt_doc.exists: return jsonify({"error": "Lesson attempt not found."}), 404
+        lesson_context = attempt_doc.to_dict().get("lesson_content", {}).get("lesson_html", "")
+        
+        prompt = f'Based on the following lesson, generate exactly {count} flashcards as a JSON array. Each object must have a "question" and "answer" key. Output only the raw JSON array. ### LESSON: {lesson_context}'
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(prompt)
+
+        # --- THIS IS THE FIX ---
+        # Add robust error handling in case the AI returns an HTML error page.
+        try:
+            cards = json.loads(_strip_fences(response.text))
+        except json.JSONDecodeError:
+            print(f"[generate_flashcards_lesson] FAILED TO PARSE AI RESPONSE.")
+            print(f"RAW AI RESPONSE WAS: {response.text}")
+            return jsonify({"error": "The AI was unable to generate flashcards from this content."}), 500
+        
+        return jsonify({"cards": cards})
+    except Exception as e:
+        print(f"[generate_flashcards_lesson] Error: {e}")
+        return jsonify({"error": "Failed to generate flashcards from lesson."}), 500
+@app.route("/generate_flashcards_topics", methods=["POST"])
+def generate_flashcards_topics():
+    data = request.get_json()
+    topic_ids, count = data.get("topic_ids"), data.get("count", 20)
+    if not topic_ids: return jsonify({"error": "At least one Topic ID is required."}), 400
+    
+    all_content = []
+    for topic_id in topic_ids:
+        doc = db.collection("ContentMaster").document(topic_id).get()
+        if doc.exists: all_content.append(doc.to_dict())
+
+    if not all_content: return jsonify({"error": "No content found for topics."}), 404
+    
+    prompt = f'Based on the following combined lesson material, generate {count} flashcards as a JSON array. Each object must have a "question" and "answer" key. Output only the raw JSON array. ### MATERIAL: {json.dumps(all_content)}'
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(prompt)
+        cards = json.loads(_strip_fences(response.text))
+        return jsonify({"cards": cards})
+    except Exception as e:
+        print(f"[generate_flashcards_topics] Error: {e}")
+        return jsonify({"error": "Failed to generate flashcards from topics."}), 500
+
+@app.route("/export_flashcards", methods=["POST"])
+def export_flashcards():
+    data = request.get_json()
+    file_format, title, cards = data.get("format"), data.get("title"), data.get("cards")
+    if not all([file_format, title, cards]): return jsonify({"error": "Format, title, and cards are required."}), 400
+    
+    if file_format == "xlsx":
+        output = io.BytesIO()
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Flashcards"
+        sheet.append(["Question", "Answer"])
+        for card in cards:
+            sheet.append([card.get("question", ""), card.get("answer", "")])
+        workbook.save(output)
+        output.seek(0)
+        return send_file(output, as_attachment=True, download_name=f"{title}.xlsx", mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+    elif file_format == "pdf":
+        output = io.BytesIO()
+        pdf = FPDF(font_cache_dir=None)
+        pdf.add_page()
+        pdf.set_font("Helvetica", size=12)
+        
+        for i, card in enumerate(cards):
+            question = card.get("question", "")
+            answer = card.get("answer", "")
+            
+            pdf.set_font("Helvetica", 'B', 12)
+            # THIS IS THE FIX: The `new_x="LMARGIN"` parameter tells the library it's
+            # okay to break long words if necessary, preventing the crash.
+            pdf.multi_cell(0, 10, f"Q{i+1}: {question}", new_x="LMARGIN", new_y="NEXT")
+            
+            pdf.set_font("Helvetica", '', 12)
+            pdf.multi_cell(0, 10, f"A: {answer}", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(5)
+
+        pdf_bytes = pdf.output()
+        output.write(pdf_bytes)
+        output.seek(0)
+        return send_file(output, as_attachment=True, download_name=f"{title}.pdf", mimetype='application/pdf')
+
+    return jsonify({"error": "Unsupported format"}), 400
 
 # ── API: FINAL CUMULATIVE QUIZ (STATEFUL) ────────────────────────────────────────
 @app.route("/generate_final_quiz", methods=["POST"])
@@ -613,7 +856,7 @@ const fs = require("fs");
 const path = require("path");
 
 const allowedExtensions = [".js", ".json", ".html", ".css", ".md", ".py"];
-const ignoredDirs = ["node_modules", ".git"];
+const ignoredDirs = ["node_modules", "venv", "__pycache__", ".git"];
 const ignoredFiles = [
   "exportProject.js",
   "client_secret.json",
@@ -1027,111 +1270,1175 @@ Evaluate your insurance coverage and emergency fund in light of your debts. Ensu
 Set calendar reminders to review your debt reduction progress and strategy every three months. During these check-ins, assess whether your chosen method is working, whether any refinancing opportunities have emerged, and whether your balance between debt payoff and other financial goals still feels appropriate.
 
 
+--- static/js/main.js ---
+/* FILE: static/js/main.js
+   Paramigo Front-End  —  FULL MERGE  •  24 Jun 2025
+   ─────────────────────────────────────────────────────────────────────────
+   ▸ Restores Firebase auth & the entire SPA workflow
+   ▸ Adds source-material accordion, Create-Topic, flashcards, export
+   ▸ Modernises utilities & CSS hooks
+*/
+
+/* ───── 1.  ES-MODULE IMPORTS & FIREBASE SETUP ────────────────────────── */
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import {
+  getAuth,
+  onAuthStateChanged,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signOut,
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyB4EJ5fu2ZGn3YG6NerCZRHfLj3F1mvpww",
+  authDomain: "paramigo-tool-03.firebaseapp.com",
+  projectId: "paramigo-tool-03",
+  storageBucket: "paramigo-tool-03.firebasestorage.app",
+  messagingSenderId: "626376082375",
+  appId: "1:626376082375:web:7b0edfa3319c258d900fe2",
+  measurementId: "G-5C44175E71",
+};
+const fbApp = initializeApp(firebaseConfig);
+const auth = getAuth(fbApp);
+
+/* ───── 2.  DOM HELPERS & BASE UTILITIES ──────────────────────────────── */
+const $ = (sel, p = document) => p.querySelector(sel);
+const $$ = (sel, p = document) => [...p.querySelectorAll(sel)];
+const el = (tag, cls = "", txt = "") => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (txt) n.textContent = txt;
+  return n;
+};
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function post(url, body) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+  return r.json();
+}
+
+/* Ensure options field is always an array (defensive) */
+function normalizeOptions(opt) {
+  if (Array.isArray(opt)) return opt;
+  if (typeof opt === "string") {
+    const matches = opt.match(/[A-Z]\)[^A-Z]*/g);
+    return (matches || opt.split(/[;,]/)).map((s) => s.trim());
+  }
+  return [];
+}
+
+function formatSourceMaterialAsHtml(source) {
+  // NEW: Handle AI-generated source material, which has a different structure.
+  if (source.ai_generated && source.lesson_content) {
+    let html = "<h3>AI-Generated Lesson Content</h3>";
+    html += source.lesson_content.lesson_html;
+    return html;
+  }
+
+  // Fallback for original, human-written source material.
+  let html = "";
+  if (source.goal) {
+    html += `<h3>Goal</h3><p>${source.goal}</p>`;
+  }
+  if (source.outcomes && source.outcomes.length) {
+    html += `<h3>Outcomes</h3><ul>${source.outcomes
+      .map((o) => `<li>${o}</li>`)
+      .join("")}</ul>`;
+  }
+  if (source.talking_points) {
+    html += `<h3>Talking Points</h3><p>${source.talking_points}</p>`;
+  }
+  if (source.philosophy) {
+    html += `<h3>Philosophy</h3><p>${source.philosophy}</p>`;
+  }
+  if (source.resources && source.resources.length) {
+    html += `<h3>Resources</h3><ul>${source.resources
+      .map((r) => `<li>${r}</li>`)
+      .join("")}</ul>`;
+  }
+  if (source.tasks && source.tasks.length) {
+    html += `<h3>Tasks</h3><dl>${source.tasks
+      .map(
+        (t) => `<dt><strong>${t.title}</strong></dt><dd>${t.description}</dd>`
+      )
+      .join("")}</dl>`;
+  }
+  if (source.other_notes) {
+    html += `<h3>Other Notes</h3><p>${source.other_notes}</p>`;
+  }
+  return html || "<p>No structured source material found.</p>";
+}
+
+/* ───── 3.  GLOBAL STATE & DOM REFERENCES ─────────────────────────────── */
+let currentUser = null;
+let currentAttemptId = null;
+let currentLessonId = null;
+let currentLessonContext = null;
+let libraryData = [];
+let currentFinalQuizQuestions = [];
+let FLASHCARDS = [];
+
+const loginContainer = $("#login-container");
+const appContainer = $("#app-container");
+const userNameSpan = $("#user-name");
+const flashcardTopicModal = $("#flashcard-topic-modal");
+const flashcardTopicSelectionList = $("#flashcard-topic-selection-list");
+const generateFlashcardsBtnModal = $("#generate-flashcards-btn-modal");
+const cancelFlashcardsBtnModal = $("#cancel-flashcards-btn-modal");
+const selectAllFlashcardTopicsCheckbox = $(
+  "#select-all-flashcard-topics-checkbox"
+);
+
+const views = {
+  library: $("#lesson-library-view"),
+  topicDetail: $("#topic-detail-view"),
+  lesson: $("#lesson-taking-view"),
+  results: $("#results-view"),
+  finalQuiz: $("#final-quiz-view"),
+};
+const tutorButton = $("#tutor-button");
+const tutorChatContainer = $("#tutor-chat-container");
+const tutorChatHistory = $("#tutor-chat-history");
+const tutorInput = $("#tutor-input");
+
+const finalQuizModal = $("#final-quiz-modal");
+const topicSelectionList = $("#topic-selection-list");
+const generateFinalQuizBtn = $("#generate-final-quiz-btn");
+const cancelFinalQuizBtn = $("#cancel-final-quiz-btn");
+const questionCountInput = $("#question-count-input");
+const selectAllTopicsCheckbox = $("#select-all-topics-checkbox");
+
+/* ───── 4.  VIEW HELPERS ──────────────────────────────────────────────── */
+function showView(name) {
+  Object.values(views).forEach((v) => (v.style.display = "none"));
+  views[name].style.display = "block";
+  tutorButton.style.display =
+    name === "lesson" || name === "results" ? "block" : "none";
+  window.scrollTo(0, 0);
+}
+window.showView = showView;
+
+/* ───── 5.  LIBRARY & DASHBOARD RENDERING ─────────────────────────────── */
+async function initializeAppForUser(user) {
+  currentUser = user;
+  // Now expects three lists from the backend
+  const { library, user_creations, final_quiz_history } = await post(
+    "/get_library_and_history",
+    { user_id: user.uid }
+  );
+
+  const safeUserCreations = user_creations || [];
+  libraryData = [...(library || []), ...safeUserCreations]; // Combine for other parts of the app
+
+  const dynamicArea = $("#library-dynamic-area", views.library);
+  if (!dynamicArea)
+    return console.error("Critical error: #library-dynamic-area not found!");
+
+  const renderTopicList = (topics, isUserCreated = false) => {
+    return topics
+      .map(
+        (t) => `
+      <li class="lesson-item" onclick="showTopicDetail('${t.id}')">
+        <span class="lesson-title">${t.title}</span>
+        ${
+          t.attempts.length
+            ? '<span class="lesson-item-indicator">✔ Started</span>'
+            : ""
+        }
+        ${
+          isUserCreated
+            ? `<button class="delete-topic-btn" onclick="event.stopPropagation(); deleteCustomTopic('${t.id}', '${t.title}')">Delete</button>`
+            : ""
+        }
+      </li>
+    `
+      )
+      .join("");
+  };
+
+  let libraryHtml =
+    "<h2>Lesson Library</h2><p>Select a topic to begin or review your history.</p>";
+  libraryHtml += `<ul id="lesson-list">${renderTopicList(library || [])}</ul>`;
+
+  if (safeUserCreations.length > 0) {
+    libraryHtml += `
+      <hr style="margin:2em 0">
+      <h3>Your Created Topics</h3>
+      <ul id="user-creations-list">${renderTopicList(
+        safeUserCreations,
+        true
+      )}</ul>
+    `;
+  }
+
+  if (final_quiz_history?.length) {
+    libraryHtml += `
+      <hr style="margin:2em 0">
+      <h3>Final Quiz History</h3>
+      <ul id="final-quiz-history-list">
+        ${final_quiz_history
+          .map(
+            (h) => `
+          <li class="attempt-item" onclick="reviewFinalQuiz('${h.attempt_id}')">
+            <strong>${h.title}</strong><br>
+            Score: ${
+              h.score !== null
+                ? `${h.score}/${h.questions_total}`
+                : "In Progress"
+            }<br>
+            <small>${new Date(h.started_at).toLocaleString()}</small>
+          </li>
+        `
+          )
+          .join("")}
+      </ul>`;
+  }
+
+  dynamicArea.innerHTML = libraryHtml;
+
+  // --- THIS IS THE FIX ---
+  // We re-add the event listener for the Final Quiz button, which was accidentally removed.
+  $("#final-quiz-button").addEventListener("click", showFinalQuizModal);
+
+  showView("library");
+}
+
+/* ── Topic detail ───────────────── */
+function showTopicDetail(topicId) {
+  currentLessonId = topicId;
+  const topic = libraryData.find((t) => t.id === topicId);
+  if (!topic) return;
+
+  const history = topic.attempts
+    .map(
+      (a) => `<li class="attempt-item" onclick="reviewLesson('${
+        a.attempt_id
+      }')">
+               <strong>${a.title}</strong><br>
+               Score: ${
+                 a.score !== null
+                   ? `${a.score}/${a.questions_total}`
+                   : "In Progress"
+               }<br>
+               <small>${new Date(a.started_at).toLocaleString()}</small>
+             </li>`
+    )
+    .join("");
+
+  views.topicDetail.innerHTML = `
+    <button onclick="showView('library')">← Back to Library</button>
+    <h2 style="margin-top:1em">${topic.title}</h2>
+    <button class="btn-primary" onclick="startLesson('${
+      topic.id
+    }')">Start New Attempt</button>
+    <hr style="margin:2em 0">
+    <h3>Your Previous Attempts</h3>
+    ${history || "<p>You have no history for this topic yet.</p>"}  
+  `;
+  showView("topicDetail");
+}
+window.showTopicDetail = showTopicDetail;
+
+/* ───── 6.  LESSON FLOW ──────────────────────────────────────────────── */
+async function startLesson(lessonId, originalAttemptId = null) {
+  views.lesson.innerHTML = "<h2>Loading Lesson…</h2>";
+  showView("lesson");
+  try {
+    const payload = { user_id: currentUser.uid, lesson_id: lessonId };
+    if (originalAttemptId) payload.original_attempt_id = originalAttemptId;
+
+    const data = await post("/start_lesson", payload);
+    currentAttemptId = data.attempt_id;
+    currentLessonId = data.lesson_id;
+    currentLessonContext = data.content;
+    renderLesson(data.content, data.lesson_id);
+  } catch (e) {
+    views.lesson.innerHTML = `<h2>Error</h2><p>${e.message}</p>`;
+  }
+}
+window.startLesson = startLesson;
+
+/* MAIN LESSON RENDERER (adds accordion & flashcards) */
+async function renderLesson(content, lessonId) {
+  const root = views.lesson;
+  const { lesson_html, quiz_questions } = content;
+
+  /* Lesson body */
+  root.innerHTML = `<div>${lesson_html}</div>`;
+
+  /* -- FEATURE: Accordion with raw source material -- */
+  try {
+    const src = await post("/get_source_material", {
+      user_id: currentUser.uid,
+      lesson_id: lessonId,
+    });
+    const acc = el("div", "accordion");
+    const head = el("button", "accordion-head", "Show Source Material");
+    const body = el("div", "accordion-body"); // Changed from <pre> to <div>
+
+    // FIX: Use the new formatter function
+    body.innerHTML = formatSourceMaterialAsHtml(src);
+
+    body.style.display = "none";
+    head.onclick = () => {
+      const open = body.style.display === "block";
+      body.style.display = open ? "none" : "block";
+      head.textContent = open ? "Show Source Material" : "Hide Source Material";
+    };
+    acc.append(head, body);
+    root.append(acc);
+  } catch (err) {
+    console.warn("Accordion error:", err.message);
+  }
+
+  /* Flashcards button */
+  const fcBtn = el("button", "btn-primary", "Generate Flashcards");
+  fcBtn.style.marginTop = "1.5em";
+  fcBtn.onclick = genFlashcardsLesson;
+  root.append(fcBtn);
+
+  /* Quiz */
+  const shuffled = [...quiz_questions].sort(() => Math.random() - 0.5);
+  const quizHtml = shuffled
+    .map((q, i) => {
+      const origIndex = quiz_questions.indexOf(q);
+      const opts = normalizeOptions(q.options)
+        .map(
+          (o, j) =>
+            `<label><input type="radio" name="${origIndex}" value="${j}" required><span>${o}</span></label>`
+        )
+        .join("");
+      return `<div class="quiz-question"><h4>${i + 1}. ${
+        q.question
+      }</h4><div class="quiz-options">${opts}</div></div>`;
+    })
+    .join("");
+
+  root.insertAdjacentHTML(
+    "beforeend",
+    `<form id="quiz-form" style="margin-top:2em">
+        <h3>Check Your Understanding</h3>
+        ${quizHtml}
+        <button type="button" class="btn-primary" onclick="submitQuiz()">Submit & Score My Quiz</button>
+     </form>
+     <button class="back-to-library" onclick="showTopicDetail('${lessonId}')" style="margin-top:1em;background:#6c757d">Cancel and Go Back</button>`
+  );
+}
+
+/* Submit quiz */
+async function submitQuiz() {
+  const formData = new FormData($("#quiz-form"));
+  const userAnswers = Object.fromEntries(formData.entries());
+  views.results.innerHTML = "<h2>Scoring…</h2>";
+  showView("results");
+  try {
+    const data = await post("/submit_quiz", {
+      user_id: currentUser.uid,
+      attempt_id: currentAttemptId,
+      user_answers: userAnswers,
+      lesson_id: currentLessonId,
+    });
+    currentLessonContext = data.content;
+    renderResultsView(data, currentAttemptId);
+  } catch (e) {
+    views.results.innerHTML = `<h2>Error</h2><p>${e.message}</p>`;
+  }
+}
+window.submitQuiz = submitQuiz;
+
+/* Render quiz RESULTS with Source Material Accordion */
+/* Render quiz RESULTS with Source Material Accordion */
+async function renderResultsView(data, attemptId) {
+  const {
+    lesson_id,
+    content,
+    user_answers,
+    score,
+    questions_total,
+    smart_focus,
+  } = data;
+
+  // Start building the HTML
+  let html = `<h2>Reviewing: ${content.title || "Lesson"}</h2>`;
+
+  // Fetch and format the source material before rendering
+  try {
+    const src = await post("/get_source_material", {
+      user_id: currentUser.uid,
+      lesson_id: lesson_id,
+    });
+    // Build the accordion HTML as a string
+    html += `
+      <div class="accordion">
+        <button class="accordion-head" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'block' ? 'none' : 'block'">Show Source Material</button>
+        <div class="accordion-body" style="display: none;">${formatSourceMaterialAsHtml(
+          src
+        )}</div>
+      </div>
+    `;
+  } catch (err) {
+    console.warn("Accordion error:", err.message);
+  }
+
+  // Add the AI-Generated Lesson and Score Summary
+  html += `
+    <details class="lesson-accordion"><summary>Click to review AI-Generated Lesson</summary><div>${content.lesson_html}</div></details>
+    <hr style="margin:2em 0">
+    <div class="results-summary"><h3>Your Score: ${score} / ${questions_total}</h3></div>
+  `;
+
+  // Render the question-by-question results
+  html += content.quiz_questions
+    .map((q, i) => {
+      const opts = normalizeOptions(q.options)
+        .map((o, j) => {
+          let cls = "option",
+            icon = "⚪";
+          if (j === q.correct_answer_index) {
+            cls += " correct";
+            icon = "✅";
+          } else if (String(j) === user_answers[i]) {
+            cls += " incorrect-selection";
+            icon = "❌";
+          }
+          return `<div class="${cls}"><span class="icon">${icon}</span> ${o}</div>`;
+        })
+        .join("");
+      return `<div class="results-question"><h4>${i + 1}. ${
+        q.question
+      }</h4><div class="results-options">${opts}</div><div class="explanation"><strong>Explanation:</strong> ${
+        q.explanation
+      }</div></div>`;
+    })
+    .join("");
+
+  // Add the Smart Focus prompt if needed
+  if (smart_focus?.smart_focus_needed) {
+    const list = smart_focus.missed_concepts
+      .map((c) => `<li><strong>${c}</strong></li>`)
+      .join("");
+    html += `
+      <div class="smart-focus-prompt">
+        <h3>💡 Smart Focus Opportunity</h3>
+        <p>Looks like you struggled with:</p><ul>${list}</ul>
+        <hr>
+        <p><strong>Quick refresher:</strong> ${smart_focus.explanation}</p>
+        <button id="generate-focus-lesson-btn">Generate a lesson on these</button>
+      </div>`;
+  }
+
+  // Add the final action buttons
+  html += `
+    <div class="results-actions">
+      <button onclick="showTopicDetail('${lesson_id}')">← Back to Topic</button>
+      <button onclick="startLesson('${lesson_id}','${attemptId}')">Retake Quiz</button>
+      <button class="delete-btn" onclick="deleteAttempt('${attemptId}','${lesson_id}')">Delete Attempt</button>
+    </div>`;
+
+  // Set the final HTML and add event listeners
+  views.results.innerHTML = html;
+
+  $("#generate-focus-lesson-btn")?.addEventListener("click", () =>
+    startMultiConceptLesson(smart_focus.missed_concepts, lesson_id)
+  );
+}
+
+/* Delete attempt */
+async function deleteAttempt(attemptId, lessonId) {
+  if (!confirm("Really delete this attempt?")) return;
+  await post("/delete_attempt", {
+    user_id: currentUser.uid,
+    attempt_id: attemptId,
+  });
+  await initializeAppForUser(currentUser);
+  showTopicDetail(lessonId);
+}
+window.deleteAttempt = deleteAttempt;
+
+// Permanently deletes a custom topic and all its history
+async function deleteCustomTopic(topicId, topicTitle) {
+  if (
+    !confirm(
+      `Are you sure you want to permanently delete the topic "${topicTitle}" and all of your attempts? This cannot be undone.`
+    )
+  ) {
+    return;
+  }
+  try {
+    await post("/delete_custom_topic", {
+      user_id: currentUser.uid,
+      topic_id: topicId,
+    });
+    // Refresh the library view to show the topic is gone
+    await initializeAppForUser(currentUser);
+  } catch (e) {
+    alert(`Failed to delete topic: ${e.message}`);
+  }
+}
+window.deleteCustomTopic = deleteCustomTopic;
+
+/* Review past attempt */
+async function reviewLesson(attemptId) {
+  views.results.innerHTML = "<h2>Loading…</h2>";
+  showView("results");
+  try {
+    const data = await post("/get_lesson_attempt", {
+      user_id: currentUser.uid,
+      attempt_id: attemptId,
+    });
+    currentLessonContext = data.content;
+    currentLessonId = data.lesson_id;
+    renderResultsView(data, attemptId);
+  } catch (e) {
+    views.results.innerHTML = `<h2>Error</h2><p>${e.message}</p>`;
+  }
+}
+window.reviewLesson = reviewLesson;
+
+/* ───── 7.  SMART-FOCUS LESSON ────────────────────────────────────────── */
+async function startMultiConceptLesson(concepts, parentLessonId) {
+  views.lesson.innerHTML = "<h2>Generating Focused Lesson…</h2>";
+  showView("lesson");
+  try {
+    const data = await post("/start_multi_concept_lesson", {
+      user_id: currentUser.uid,
+      concepts,
+      parent_lesson_id: parentLessonId,
+    });
+    currentAttemptId = data.attempt_id;
+    currentLessonId = data.lesson_id;
+    currentLessonContext = data.content;
+    renderLesson(data.content, data.lesson_id);
+  } catch (e) {
+    views.lesson.innerHTML = `<h2>Error</h2><p>${e.message}</p>`;
+  }
+}
+window.startMultiConceptLesson = startMultiConceptLesson;
+
+/* ───── 8.  FLASHCARDS (lesson & multi-topic) ─────────────────────────── */
+function showCards(cards, heading) {
+  $("#flash-modal")?.remove();
+  const ov = el("div", "modal-ov");
+  ov.id = "flash-modal";
+  const md = el("div", "modal");
+  md.append(el("h3", "", heading));
+
+  const deck = el("div", "deck");
+  cards.forEach((c) => {
+    const card = el("div", "card");
+    const front = el("div", "face front", c.question);
+    const back = el("div", "face back", c.answer);
+    card.append(front, back);
+    card.onclick = () => card.classList.toggle("flip");
+    deck.append(card);
+  });
+  md.append(deck);
+
+  const exp = el("div", "export");
+  const pdf = el("button", "btn-outline", "PDF");
+  const xls = el("button", "btn-outline", "Spreadsheet");
+
+  // FIX: Pass the button element to the export function for loading state
+  pdf.onclick = (e) => exportCards("pdf", heading, e.target);
+  xls.onclick = (e) => exportCards("xlsx", heading, e.target);
+
+  exp.append(pdf, xls);
+  md.append(exp);
+
+  const closeBtn = el("button", "close", "×");
+
+  // FIX: Make close button and background overlay work correctly
+  closeBtn.onclick = () => ov.remove();
+  ov.onclick = () => ov.remove();
+  md.onclick = (e) => e.stopPropagation(); // Prevents click inside modal from closing it
+
+  md.append(closeBtn);
+  ov.append(md);
+  document.body.append(ov);
+}
+
+async function genFlashcardsLesson() {
+  // FIX: Add loading state to the button that was clicked ('this')
+  const btn = this;
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Generating...";
+
+  try {
+    const { cards } = await post("/generate_flashcards_lesson", {
+      user_id: currentUser.uid,
+      attempt_id: currentAttemptId,
+      count: 12,
+    });
+    FLASHCARDS = cards;
+    showCards(cards, "Flashcards");
+  } catch (e) {
+    alert("Flashcard error: " + e.message);
+  } finally {
+    // Always restore the button after the attempt
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+async function genFlashcardsTopics(ids) {
+  // FIX: Add loading state to the library flashcard button
+  const btn = $("#library-flashcards-btn");
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Generating...";
+
+  try {
+    const { cards } = await post("/generate_flashcards_topics", {
+      user_id: currentUser.uid,
+      topic_ids: ids,
+      count: 25,
+    });
+    FLASHCARDS = cards;
+    showCards(cards, "Multi-Topic Flashcards");
+  } catch (e) {
+    alert("Flashcard error: " + e.message);
+  } finally {
+    // Always restore the button after the attempt
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+async function exportCards(format, title, btn) {
+  // FIX: Add loading state to the export button
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Exporting...";
+
+  try {
+    const blob = await (
+      await fetch("/export_flashcards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ format, title, cards: FLASHCARDS }),
+      })
+    ).blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download =
+      title.replace(/\s+/g, "_") + (format === "pdf" ? ".pdf" : ".xlsx");
+    document.body.append(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert("Export failed: " + e.message);
+  } finally {
+    // Always restore the button after the attempt
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+/* ───── 9.  FINAL QUIZ (stateful) ─────────────────────────────────────── */
+function showFinalQuizModal() {
+  topicSelectionList.innerHTML = libraryData
+    .map(
+      (t) =>
+        `<label><input type="checkbox" name="final-quiz-topic" value="${t.id}"> ${t.title}</label>`
+    )
+    .join("");
+  finalQuizModal.style.display = "flex";
+}
+function hideFinalQuizModal() {
+  finalQuizModal.style.display = "none";
+}
+async function generateFinalQuiz() {
+  const selected = Array.from($$('input[name="final-quiz-topic"]:checked')).map(
+    (c) => c.value
+  );
+  const count = parseInt(questionCountInput.value, 10);
+  if (!selected.length) return alert("Select at least one topic.");
+  if (count < 5 || count > 20) return alert("Request 5-20 questions.");
+
+  hideFinalQuizModal();
+  views.finalQuiz.innerHTML = "<h2>Generating Final Quiz…</h2>";
+  showView("finalQuiz");
+
+  try {
+    const data = await post("/generate_final_quiz", {
+      user_id: currentUser.uid,
+      topic_ids: selected,
+      question_count: count,
+    });
+    currentAttemptId = data.attempt_id;
+    currentFinalQuizQuestions = data.quiz_questions;
+    renderFinalQuizView(currentFinalQuizQuestions);
+  } catch (e) {
+    views.finalQuiz.innerHTML = `<h2>Error</h2><p>${e.message}</p>`;
+  }
+}
+function renderFinalQuizView(questions) {
+  const shuffled = [...questions].sort(() => Math.random() - 0.5);
+  const quizHtml = shuffled
+    .map((q, i) => {
+      const orig = questions.indexOf(q);
+      const opts = normalizeOptions(q.options)
+        .map(
+          (o, j) =>
+            `<label><input type="radio" name="${orig}" value="${j}" required><span>${o}</span></label>`
+        )
+        .join("");
+      return `<div class="quiz-question"><h4>${i + 1}. ${
+        q.question
+      }</h4><div class="quiz-options">${opts}</div></div>`;
+    })
+    .join("");
+
+  views.finalQuiz.innerHTML = `
+    <h2>Cumulative Final Quiz</h2>
+    <form id="final-quiz-form">${quizHtml}
+      <button type="button" class="btn-primary" onclick="submitFinalQuiz()">Submit Final Quiz</button>
+    </form>
+    <button class="back-to-library" onclick="showView('library')" style="margin-top:1em;background:#6c757d">Cancel</button>`;
+}
+async function submitFinalQuiz() {
+  const ans = Object.fromEntries(new FormData($("#final-quiz-form")).entries());
+  views.finalQuiz.innerHTML = "<h2>Scoring…</h2>";
+  showView("finalQuiz");
+  try {
+    const data = await post("/submit_final_quiz", {
+      user_id: currentUser.uid,
+      attempt_id: currentAttemptId,
+      user_answers: ans,
+    });
+    renderFinalQuizResults(data);
+  } catch (e) {
+    views.finalQuiz.innerHTML = `<h2>Error</h2><p>${e.message}</p>`;
+  }
+}
+function renderFinalQuizResults(data) {
+  const { quiz_questions, user_answers, score, questions_total, title } = data;
+  let html = `<h2>Final Quiz Results: ${title}</h2>
+              <div class="results-summary"><h3>Your Score: ${score}/${questions_total}</h3></div>`;
+
+  html += quiz_questions
+    .map((q, i) => {
+      const opts = normalizeOptions(q.options)
+        .map((o, j) => {
+          let cls = "option",
+            icon = "⚪";
+          if (j === q.correct_answer_index) {
+            cls += " correct";
+            icon = "✅";
+          } else if (String(j) === user_answers[i]) {
+            cls += " incorrect-selection";
+            icon = "❌";
+          }
+          return `<div class="${cls}"><span class="icon">${icon}</span> ${o}</div>`;
+        })
+        .join("");
+      return `<div class="results-question"><h4>${i + 1}. ${
+        q.question
+      }</h4><div class="results-options">${opts}</div><div class="explanation"><strong>Explanation:</strong> ${
+        q.explanation
+      }</div></div>`;
+    })
+    .join("");
+
+  html += `<button class="back-to-library" onclick="showView('library')" style="margin-top:2em">← Back to Library</button>`;
+  views.finalQuiz.innerHTML = html;
+}
+window.renderFinalQuizView = renderFinalQuizView;
+
+// ** OMISSION FIXED: This function was missing in the previous response **
+async function reviewFinalQuiz(attemptId) {
+  views.finalQuiz.innerHTML = "<h2>Loading Past Results...</h2>";
+  showView("finalQuiz");
+  try {
+    const data = await post("/get_final_quiz_attempt", {
+      user_id: currentUser.uid,
+      attempt_id: attemptId,
+    });
+    renderFinalQuizResults(data);
+  } catch (e) {
+    views.finalQuiz.innerHTML = `<h2>Error</h2><p>${e.message}</p>`;
+  }
+}
+window.reviewFinalQuiz = reviewFinalQuiz;
+
+/* Final-quiz modal wiring */
+generateFinalQuizBtn.addEventListener("click", generateFinalQuiz);
+cancelFinalQuizBtn.addEventListener("click", hideFinalQuizModal);
+selectAllTopicsCheckbox.addEventListener("change", (e) => {
+  $$('input[name="final-quiz-topic"]').forEach(
+    (c) => (c.checked = e.target.checked)
+  );
+});
+
+/* ───── 10.  CREATE-TOPIC WORKFLOW ────────────────────────────────────── */
+$("#create-topic-btn").onclick = async () => {
+  const title = prompt("Enter a custom topic title:");
+  if (!title) return;
+
+  const btn = $("#create-topic-btn");
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Creating...";
+
+  try {
+    const data = await post("/create_custom_topic", {
+      user_id: currentUser.uid,
+      topic_title: title,
+    });
+
+    currentAttemptId = data.attempt_id;
+    currentLessonId = data.lesson_id;
+    currentLessonContext = data.content;
+
+    // --- THIS IS THE FIX ---
+    // Manually add the new topic to our local libraryData array.
+    // This makes the "Cancel and Go Back" button work immediately without
+    // needing to re-fetch the entire library from the server.
+    libraryData.push({
+      id: data.lesson_id,
+      title: title,
+      attempts: [], // It's a new topic, so it has no completed attempts yet.
+    });
+
+    renderLesson(data.content, data.lesson_id);
+    showView("lesson");
+  } catch (e) {
+    alert(e.message);
+    showView("library");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+};
+
+/* ───── 11.  FLASHCARDS FROM LIBRARY (multi-topic) ────────────────────── */
+function showFlashcardTopicModal() {
+  flashcardTopicSelectionList.innerHTML = libraryData
+    .map(
+      (t) =>
+        `<label><input type="checkbox" name="flashcard-topic" value="${t.id}"> ${t.title}</label>`
+    )
+    .join("");
+  flashcardTopicModal.style.display = "flex";
+}
+
+// This new function hides the modal
+function hideFlashcardTopicModal() {
+  flashcardTopicModal.style.display = "none";
+}
+
+// This new function runs when the user clicks "Generate Flashcards" INSIDE the modal
+async function generateFlashcardsFromModal() {
+  const selectedIds = Array.from(
+    $$('input[name="flashcard-topic"]:checked')
+  ).map((c) => c.value);
+  if (!selectedIds.length) {
+    return alert("Please select at least one topic.");
+  }
+
+  hideFlashcardTopicModal(); // Close the modal
+  await genFlashcardsTopics(selectedIds); // Call the existing generation function
+}
+
+// --- Event Listeners to wire everything up ---
+
+// The main library button now calls the function to SHOW the modal
+$("#library-flashcards-btn").onclick = showFlashcardTopicModal;
+
+// The buttons inside the modal are now wired up
+generateFlashcardsBtnModal.addEventListener(
+  "click",
+  generateFlashcardsFromModal
+);
+cancelFlashcardsBtnModal.addEventListener("click", hideFlashcardTopicModal);
+selectAllFlashcardTopicsCheckbox.addEventListener("change", (e) => {
+  $$('input[name="flashcard-topic"]').forEach(
+    (c) => (c.checked = e.target.checked)
+  );
+});
+/* ───── 12.  AI-TUTOR CHAT (unchanged) ────────────────────────────────── */
+function toggleTutor() {
+  const hidden =
+    tutorChatContainer.style.display === "none" ||
+    !tutorChatContainer.style.display;
+  tutorChatContainer.style.display = hidden ? "flex" : "none";
+}
+window.toggleTutor = toggleTutor;
+
+function addMessageToHistory(msg, type) {
+  const m = el("div", `chat-message ${type}-message`, msg);
+  tutorChatHistory.append(m);
+  tutorChatHistory.scrollTop = tutorChatHistory.scrollHeight;
+}
+window.addMessageToHistory = addMessageToHistory;
+
+async function sendTutorMessage() {
+  const q = tutorInput.value.trim();
+  if (!q || !currentLessonContext) return;
+  addMessageToHistory(q, "user");
+  tutorInput.value = "";
+  addMessageToHistory("Typing…", "tutor");
+  try {
+    const { answer } = await post("/ask_tutor", {
+      question: q,
+      context: JSON.stringify(currentLessonContext),
+    });
+    tutorChatHistory.lastChild.remove(); // remove "Typing…"
+    addMessageToHistory(answer, "tutor");
+  } catch {
+    tutorChatHistory.lastChild.remove();
+    addMessageToHistory("Sorry, I had trouble connecting.", "tutor");
+  }
+}
+window.sendTutorMessage = sendTutorMessage;
+tutorInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendTutorMessage();
+  }
+});
+
+/* ───── 13.  AUTH CONTROLS ───────────────────────────────────────────── */
+$("#login-btn").addEventListener("click", () =>
+  signInWithPopup(auth, new GoogleAuthProvider())
+);
+$("#logout-btn").addEventListener("click", (e) => {
+  e.preventDefault();
+  signOut(auth);
+});
+
+onAuthStateChanged(auth, async (user) => {
+  loginContainer.style.display = user ? "none" : "block";
+  appContainer.style.display = user ? "block" : "none";
+  if (user) {
+    const { needs_onboarding } = await post("/create_user", {
+      uid: user.uid,
+      displayName: user.displayName,
+      email: user.email,
+    });
+    if (needs_onboarding) {
+      window.location.href = "/onboarding";
+      return;
+    }
+    userNameSpan.textContent = user.displayName || "User";
+    await initializeAppForUser(user);
+  } else {
+    currentUser = null;
+    libraryData = [];
+  }
+});
+
+/* ───── 14.  BOOTSTRAP (nothing else to do) ──────────────────────────── */
+console.log("Paramigo front-end initialised.");
+
+
 --- static/style.css ---
-/* FILE: static/style.css */
+/* FILE: static/style.css
+   Paramigo UI • Modern Refresh • June 24 2025
+   ────────────────────────────────────────────
+   ✱ Design language:
+     • Soft neutral palette (indigo + slate grays)
+     • Subtle shadows, 8 px radius, ample white-space
+     • Utility button classes (.btn-primary / .btn-outline)
+   ✱ Responsive mobile-first; desktop optimised at ≥768 px
+   ✱ Includes legacy ID selectors so existing markup keeps working
+*/
+
+/* ─── CSS Variables / Palette ───────────────────────────────────────────── */
+:root {
+  --c-bg: #f5f7fa;
+  --c-card: #ffffff;
+  --c-border: #e0e4ea;
+  --c-text: #1f2937;
+  --c-muted: #6b7280;
+
+  --c-primary: #3b82f6; /* indigo-blue */
+  --c-primary-dark: #2563eb;
+  --c-primary-light: #dbeafe;
+
+  --c-success: #16a34a;
+  --c-danger: #dc2626;
+  --c-warning: #f59e0b;
+
+  --radius: 8px;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  font-size: 16px;
+}
+
+/* ─── Global Resets ─────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 
 body {
-  font-family: sans-serif;
   margin: 0;
-  background-color: #f4f4f9;
-  color: #333;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--c-bg);
+  color: var(--c-text);
+  line-height: 1.55;
 }
-.page-container {
-  max-width: 900px;
-  margin: auto;
-  padding: 2em;
-}
+
 h1,
 h2,
 h3,
 h4 {
-  color: #0056b3;
-}
-button {
-  background-color: #007bff;
-  color: white;
-  padding: 10px 15px;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 1em;
-  transition: background-color 0.2s;
-}
-button:hover {
-  background-color: #0056b3;
-}
-button:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
-}
-ul {
-  list-style-type: none;
-  padding: 0;
-}
-#login-container {
-  text-align: center;
-  padding: 4em 2em;
+  margin: 0.4em 0;
+  line-height: 1.25;
 }
 
-/* --- Lesson Library View --- */
+a {
+  color: var(--c-primary);
+  text-decoration: none;
+}
+
+button,
+input[type="number"],
+input[type="checkbox"] {
+  font-family: inherit;
+}
+
+/* ─── Utility Buttons ───────────────────────────────────────────────────── */
+.btn-primary,
+.btn-outline {
+  padding: 10px 18px;
+  font-size: 1rem;
+  border-radius: var(--radius);
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.06s;
+  user-select: none;
+}
+
+.btn-primary {
+  background: var(--c-primary);
+  color: #fff;
+  border-color: var(--c-primary);
+}
+.btn-primary:hover {
+  background: var(--c-primary-dark);
+  border-color: var(--c-primary-dark);
+}
+
+.btn-outline {
+  background: #fff;
+  color: var(--c-primary);
+  border-color: var(--c-primary);
+}
+.btn-outline:hover {
+  background: var(--c-primary-light);
+}
+
+.btn-primary:active,
+.btn-outline:active {
+  transform: translateY(1px);
+}
+
+/* Legacy IDs to maintain behaviour */
+#final-quiz-button {
+  composes: btn-outline;
+  width: 100%;
+  padding: 14px;
+  margin-top: 1rem;
+}
+
+/* ─── Layout Helpers ────────────────────────────────────────────────────── */
+.page-container {
+  width: 90%;
+  max-width: 900px;
+  margin: 2rem auto;
+}
+
+/* Library Controls */
+.library-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+/* ─── Lesson Library View ──────────────────────────────────────────────── */
 #lesson-library-view li {
-  background-color: #fff;
+  background: var(--c-card);
   margin: 0.5em 0;
   padding: 1em;
-  border-radius: 5px;
+  border-radius: var(--radius);
+  border: 1px solid var(--c-border);
   cursor: pointer;
-  border: 1px solid #ddd;
   transition: box-shadow 0.2s;
 }
 #lesson-library-view li:hover {
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-}
-#final-quiz-button {
-  background-color: #28a745;
-  width: 100%;
-  padding: 15px;
-  font-size: 1.2em;
-  margin-top: 1em;
-}
-#final-quiz-button:hover {
-  background-color: #218838;
+  box-shadow: var(--shadow-sm);
 }
 
-/* --- Lesson Taking View & Results View --- */
+.lesson-item-indicator {
+  font-size: 0.8em;
+  font-weight: bold;
+  color: var(--c-success);
+  margin-left: 10px;
+}
+
+/* Topic attempt history */
+.attempt-item {
+  background: #f9f9f9;
+  border: 1px solid var(--c-border);
+  padding: 1em;
+  margin-bottom: 0.5em;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.attempt-item:hover {
+  background: #f1f1f1;
+}
+
+/* ─── Card-like Sections ───────────────────────────────────────────────── */
 #lesson-taking-view,
 #results-view,
 #final-quiz-view {
   margin-top: 1em;
   padding: 1.5em;
-  background-color: #fff;
-  border: 1px solid #ddd;
-  border-radius: 8px;
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
 }
+
+/* ─── Quiz & Results ───────────────────────────────────────────────────── */
 .quiz-question {
-  margin-top: 2em;
+  margin-top: 1.75em;
   padding: 1em;
-  border: 1px solid #e0e0e0;
-  border-radius: 5px;
-  background-color: #f9f9f9;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  background: #f9f9f9;
 }
 .quiz-options label {
   display: block;
   margin: 0.5em 0;
   padding: 0.5em;
-  border-radius: 5px;
+  border-radius: var(--radius);
   cursor: pointer;
   border: 2px solid transparent;
 }
 .quiz-options label:hover {
-  background-color: #e9ecef;
+  background: var(--c-primary-light);
 }
 .quiz-options input[type="radio"]:checked + span {
   font-weight: bold;
 }
+
 .results-summary {
   padding: 1em;
-  border-radius: 5px;
-  background-color: #e9ecef;
+  border-radius: var(--radius);
+  background: #e9ecef;
   text-align: center;
   margin-bottom: 2em;
 }
@@ -1142,112 +2449,150 @@ ul {
 }
 .results-options .option {
   padding: 0.5em;
-  border-radius: 5px;
-  margin: 0.2em 0;
+  border-radius: var(--radius);
+  margin: 0.25em 0;
   display: flex;
   align-items: center;
 }
 .results-options .option.correct {
-  background-color: #d4edda;
-  border-left: 5px solid #155724;
+  background: #d1fae5;
+  border-left: 5px solid var(--c-success);
 }
 .results-options .option.incorrect-selection {
-  background-color: #f8d7da;
-  border-left: 5px solid #721c24;
+  background: #fee2e2;
+  border-left: 5px solid var(--c-danger);
 }
-.results-options .option .icon {
+.results-options .icon {
   margin-right: 0.5em;
   font-size: 1.2em;
 }
 .explanation {
   margin-top: 1em;
   padding: 1em;
-  background-color: #f8f9fa;
-  border-left: 3px solid #007bff;
+  background: #f8f9fa;
+  border-left: 3px solid var(--c-primary);
 }
+
+/* Smart Focus Prompt */
 .smart-focus-prompt {
   padding: 1.5em;
-  background-color: #fffbe6;
+  background: #fffbe6;
   border: 1px solid #ffe58f;
-  border-radius: 5px;
+  border-radius: var(--radius);
   text-align: center;
   margin-top: 2em;
 }
 .smart-focus-prompt button {
-  background-color: #ffc107;
+  background: var(--c-warning);
   color: #212529;
 }
 .smart-focus-prompt button:hover {
-  background-color: #e0a800;
-}
-.back-to-library {
-  margin-top: 2em;
+  background: #e0a800;
 }
 
-/* --- Final Quiz Modal --- */
+/* ─── Back/Generic Buttons ─────────────────────────────────────────────── */
+.back-to-library,
+.delete-btn {
+  margin-top: 2em;
+}
+.delete-btn {
+  background: var(--c-danger);
+}
+.delete-btn:hover {
+  background: #b91c1c;
+}
+
+/* ─── Accordions ───────────────────────────────────────────────────────── */
+.accordion {
+  margin-top: 1.25em;
+}
+.accordion-head {
+  background: var(--c-primary);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 0.6em 1em;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.accordion-body {
+  background: #f1f5f9;
+  border: 1px solid var(--c-border);
+  border-radius: 0 0 var(--radius) var(--radius);
+  padding: 1em;
+  white-space: pre-wrap;
+  font-size: 0.9rem;
+}
+
+/* ─── Final Quiz Modal (unchanged structurally) ────────────────────────── */
 .modal-backdrop {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.5);
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
   z-index: 2000;
   display: none;
   justify-content: center;
   align-items: center;
 }
+
 .modal-content {
-  background: white;
+  background: var(--c-card);
   padding: 2em;
-  border-radius: 8px;
+  border-radius: var(--radius);
   width: 90%;
   max-width: 600px;
-}
-#topic-selection-list {
-  max-height: 300px;
-  overflow-y: auto;
-  border: 1px solid #ddd;
-  padding: 1em;
-  border-radius: 5px;
-  margin-bottom: 1em;
-}
-#topic-selection-list label {
-  display: block;
-  margin: 0.5em 0;
+  box-shadow: var(--shadow-md);
+
+  /* --- NEW STYLES TO FIX SCROLLING --- */
+  max-height: 85vh; /* 1. The modal can never be taller than 85% of the screen height */
+  display: flex; /* 2. This enables modern layout control for the children */
+  flex-direction: column; /* 3. This stacks the children (header, list, buttons) vertically */
 }
 
-/* --- AI Tutor --- */
+/*
+  ADD this entire NEW rule right after the
+  .modal-content rule you just replaced.
+*/
+#topic-selection-list,
+#flashcard-topic-selection-list {
+  overflow-y: auto; /* 4. This makes ONLY the list itself scrollable if it's too long */
+  flex-grow: 1; /* 5. This tells the list to expand to fill the available space */
+  padding-right: 1em; /* 6. This adds a little space so the scrollbar doesn't hide text */
+}
+
+/* ─── Tutor Floating Chat ──────────────────────────────────────────────── */
 #tutor-button {
   position: fixed;
   bottom: 20px;
   right: 20px;
   z-index: 1000;
-  padding: 15px 25px;
+  padding: 14px 22px;
   border-radius: 50px;
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-  font-size: 1.2em;
+  box-shadow: var(--shadow-md);
+  background: var(--c-primary);
+  color: #fff;
+  font-size: 1.1em;
   display: none;
 }
 #tutor-chat-container {
   position: fixed;
-  bottom: 100px;
+  bottom: 90px;
   right: 20px;
-  width: 350px;
+  width: 340px;
   max-height: 500px;
-  background: white;
-  border-radius: 10px;
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+  background: var(--c-card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
   z-index: 999;
   display: none;
   flex-direction: column;
 }
 #tutor-chat-header {
   padding: 10px;
-  background: #0056b3;
-  color: white;
-  border-radius: 10px 10px 0 0;
-  font-weight: bold;
+  background: var(--c-primary-dark);
+  color: #fff;
+  border-radius: var(--radius) var(--radius) 0 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1255,10 +2600,9 @@ ul {
 #tutor-close-btn {
   background: none;
   border: none;
-  color: white;
-  font-size: 1.5em;
+  color: #fff;
+  font-size: 1.4em;
   cursor: pointer;
-  padding: 0 10px;
 }
 #tutor-chat-history {
   flex-grow: 1;
@@ -1273,112 +2617,166 @@ ul {
   word-wrap: break-word;
 }
 .user-message {
-  background-color: #007bff;
-  color: white;
+  background: var(--c-primary);
+  color: #fff;
   margin-left: auto;
   border-bottom-right-radius: 0;
 }
 .tutor-message {
-  background-color: #e9ecef;
-  color: #333;
+  background: #e9ecef;
+  color: var(--c-text);
   margin-right: auto;
   border-bottom-left-radius: 0;
 }
 #tutor-input-area {
   display: flex;
   padding: 10px;
-  border-top: 1px solid #ddd;
+  border-top: 1px solid var(--c-border);
 }
 #tutor-input {
   flex-grow: 1;
-  border: 1px solid #ccc;
+  border: 1px solid var(--c-border);
   border-radius: 20px;
-  padding: 10px;
-  resize: none;
+  padding: 8px 12px;
 }
 #tutor-send-btn {
   margin-left: 10px;
   border-radius: 50%;
-  width: 45px;
-  height: 45px;
-  padding: 0;
+  width: 44px;
+  height: 44px;
+  background: var(--c-primary);
+  color: #fff;
+  border: none;
+  font-size: 1.1em;
+  cursor: pointer;
 }
+
+/* ─── Flashcard Modal / Deck ───────────────────────────────────────────── */
+.modal-ov {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 3000;
+}
+.modal {
+  background: var(--c-card);
+  border-radius: var(--radius);
+  padding: 2rem;
+  width: 90%;
+  max-width: 650px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-md);
+  position: relative;
+}
+.modal .close {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  font-size: 1.5em;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.deck {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.card {
+  perspective: 800px;
+  cursor: pointer;
+}
+.face {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 1.2rem;
+  transition: transform 0.5s;
+  backface-visibility: hidden;
+  min-height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.card .back {
+  transform: rotateY(180deg);
+}
+.card.flip .front {
+  transform: rotateY(180deg);
+}
+.card.flip .back {
+  transform: rotateY(0);
+}
+
+/* Export buttons inside modal */
+.export {
+  margin-top: 1.5rem;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+/* ─── Media Queries ────────────────────────────────────────────────────── */
+@media (min-width: 768px) {
+  .page-container {
+    width: 80%;
+  }
+  .library-controls {
+    justify-content: flex-start;
+  }
+}
+
+/* --- FIX for Jumbled Modal --- */
+#topic-selection-list label,
+#flashcard-topic-selection-list label {
+  /* Targeting both modals for consistency */
+  display: block;
+  margin-bottom: 0.75em;
+  padding: 0.25em;
+  border-radius: 4px;
+}
+
+#topic-selection-list label:hover,
+#flashcard-topic-selection-list label:hover {
+  background-color: #f0f4f8;
+}
+/* END OF FILE */
 
 
 --- templates/index.html ---
 <!-- FILE: templates/index.html -->
-
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Paramigo</title>
+
+    <!-- Global style sheet (modernised in the next step) -->
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='style.css') }}"
     />
-    <style>
-      .lesson-item-indicator {
-        font-size: 0.8em;
-        font-weight: bold;
-        color: #28a745;
-        margin-left: 10px;
-      }
-      .attempt-item {
-        background-color: #f9f9f9;
-        border: 1px solid #eee;
-        padding: 1em;
-        margin-bottom: 0.5em;
-        border-radius: 5px;
-        cursor: pointer;
-      }
-      .attempt-item:hover {
-        background-color: #f1f1f1;
-      }
-      .results-actions {
-        margin-top: 2em;
-        padding-top: 1em;
-        border-top: 1px solid #eee;
-        display: flex;
-        gap: 1em;
-        flex-wrap: wrap;
-      }
-      .results-actions .delete-btn {
-        background-color: #dc3545;
-      }
-      .results-actions .delete-btn:hover {
-        background-color: #c82333;
-      }
-      .lesson-accordion summary {
-        cursor: pointer;
-        font-weight: bold;
-        color: #0056b3;
-        margin: 1em 0;
-      }
-      .smart-focus-prompt button {
-        margin-top: 1em;
-      }
-      .smart-focus-prompt ul {
-        list-style-type: disc;
-        padding-left: 20px;
-      }
-      .smart-focus-prompt li {
-        margin-bottom: 0.5em;
-      }
-      #final-quiz-history-list .attempt-item {
-        background-color: #e6f7ff;
-      }
-    </style>
   </head>
+
   <body>
+    <!-- ───── LOGIN GATE ─────────────────────────────────────────────── -->
     <div id="login-container" class="page-container">
       <h1>Welcome to Paramigo</h1>
       <p>Please sign in to continue.</p>
       <button id="login-btn">Sign in with Google</button>
     </div>
 
+    <!-- ───── MAIN APP SHELL ──────────────────────────────────────────── -->
     <div id="app-container" style="display: none">
+      <!-- Top bar -->
       <header class="page-container" style="padding-bottom: 0">
         <p>
           Hello, <span id="user-name"></span>!
@@ -1389,22 +2787,47 @@ ul {
         </p>
       </header>
 
-      <main id="lesson-library-view" class="page-container"></main>
+      <!-- Library / Topics -->
+      <main id="lesson-library-view" class="page-container">
+        <!-- Controls injected immediately for convenience -->
+        <div class="library-controls" style="margin-bottom: 1em">
+          <button id="create-topic-btn" class="btn-primary">
+            + Create Topic
+          </button>
+          <button id="library-flashcards-btn" class="btn-outline">
+            Generate Flashcards
+          </button>
+          <button id="final-quiz-button" class="btn-outline">
+            Take a Final Quiz
+          </button>
+        </div>
+
+        <!-- Topic list & history will be rendered by JS -->
+        <div id="library-dynamic-area"></div>
+      </main>
+
+      <!-- Topic detail -->
       <main
         id="topic-detail-view"
         class="page-container"
         style="display: none"
       ></main>
+
+      <!-- Active lesson -->
       <main
         id="lesson-taking-view"
         class="page-container"
         style="display: none"
       ></main>
+
+      <!-- Results / review -->
       <main
         id="results-view"
         class="page-container"
         style="display: none"
       ></main>
+
+      <!-- Final quiz workflow -->
       <main
         id="final-quiz-view"
         class="page-container"
@@ -1412,9 +2835,11 @@ ul {
       ></main>
     </div>
 
+    <!-- ───── FLOATING AI-TUTOR CHAT ──────────────────────────────────── -->
     <button id="tutor-button" style="display: none" onclick="toggleTutor()">
       Ask Tutor 💬
     </button>
+
     <div id="tutor-chat-container">
       <div id="tutor-chat-header">
         <span>AI Tutor</span>
@@ -1427,6 +2852,7 @@ ul {
       </div>
     </div>
 
+    <!-- ───── FINAL-QUIZ TOPIC-PICKER MODAL ───────────────────────────── -->
     <div id="final-quiz-modal" class="modal-backdrop">
       <div class="modal-content">
         <h2>Create a Cumulative Quiz</h2>
@@ -1434,6 +2860,7 @@ ul {
           Select the topics you want to include and the total number of
           questions for your quiz.
         </p>
+
         <div
           style="
             margin-bottom: 1em;
@@ -1446,9 +2873,11 @@ ul {
             <strong>Select All / Deselect All</strong>
           </label>
         </div>
+
         <div id="topic-selection-list">
-          <!-- Checkboxes will be populated by JS -->
+          <!-- Topic check-boxes injected by JS -->
         </div>
+
         <div>
           <label for="question-count-input">Number of Questions:</label>
           <input
@@ -1460,6 +2889,7 @@ ul {
             style="width: 60px"
           />
         </div>
+
         <div style="margin-top: 2em">
           <button id="generate-final-quiz-btn">Generate Quiz</button>
           <button id="cancel-final-quiz-btn" style="background-color: #6c757d">
@@ -1469,737 +2899,49 @@ ul {
       </div>
     </div>
 
-    <script type="module">
-      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-      import {
-        getAuth,
-        onAuthStateChanged,
-        GoogleAuthProvider,
-        signInWithPopup,
-        signOut,
-      } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+    <!-- ───── FLASHCARD TOPIC-PICKER MODAL ────────────────────────── -->
+    <div id="flashcard-topic-modal" class="modal-backdrop">
+      <div class="modal-content">
+        <h2>Generate Flashcards</h2>
+        <p>Select the topics you want to include in your flashcard deck.</p>
 
-      // --- Firebase Config ---
-      const firebaseConfig = {
-        apiKey: "AIzaSyB4EJ5fu2ZGn3YG6NerCZRHfLj3F1mvpww",
-        authDomain: "paramigo-tool-03.firebaseapp.com",
-        projectId: "paramigo-tool-03",
-        storageBucket: "paramigo-tool-03.firebasestorage.app",
-        messagingSenderId: "626376082375",
-        appId: "1:626376082375:web:7b0edfa3319c258d900fe2",
-        measurementId: "G-5C44175E71",
-      };
+        <div
+          style="
+            margin-bottom: 1em;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 0.5em;
+          "
+        >
+          <label>
+            <input type="checkbox" id="select-all-flashcard-topics-checkbox" />
+            <strong>Select All / Deselect All</strong>
+          </label>
+        </div>
 
-      const app = initializeApp(firebaseConfig);
-      const auth = getAuth(app);
+        <div id="flashcard-topic-selection-list">
+          <!-- Topic check-boxes injected by JS -->
+        </div>
 
-      // --- Helpers ---
-      // Always return an *array* of option strings.
-      function normalizeOptions(optionsField) {
-        if (Array.isArray(optionsField)) return optionsField;
-        if (typeof optionsField === "string") {
-          // Split patterns like "A) Foo. B) Bar."  (fallback to commas / semicolons)
-          const matches = optionsField.match(/[A-Z]\)[^A-Z]*/g);
-          return (matches || optionsField.split(/[;,]/)).map((s) => s.trim());
-        }
-        return [];
-      }
+        <div style="margin-top: 2em">
+          <button id="generate-flashcards-btn-modal">
+            Generate Flashcards
+          </button>
+          <button
+            id="cancel-flashcards-btn-modal"
+            style="background-color: #6c757d"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
 
-      // --- Global State ---
-      let currentUser = null;
-      let currentAttemptId = null;
-      let currentLessonId = null;
-      let currentLessonContext = null;
-      let libraryData = [];
-      let currentFinalQuizQuestions = [];
-
-      const loginContainer = document.getElementById("login-container");
-      const appContainer = document.getElementById("app-container");
-      const userNameSpan = document.getElementById("user-name");
-      const views = {
-        library: document.getElementById("lesson-library-view"),
-        topicDetail: document.getElementById("topic-detail-view"),
-        lesson: document.getElementById("lesson-taking-view"),
-        results: document.getElementById("results-view"),
-        finalQuiz: document.getElementById("final-quiz-view"),
-      };
-      const tutorButton = document.getElementById("tutor-button");
-      const tutorChatContainer = document.getElementById(
-        "tutor-chat-container"
-      );
-      const tutorChatHistory = document.getElementById("tutor-chat-history");
-      const tutorInput = document.getElementById("tutor-input");
-
-      const finalQuizModal = document.getElementById("final-quiz-modal");
-      const topicSelectionList = document.getElementById(
-        "topic-selection-list"
-      );
-      const generateFinalQuizBtn = document.getElementById(
-        "generate-final-quiz-btn"
-      );
-      const cancelFinalQuizBtn = document.getElementById(
-        "cancel-final-quiz-btn"
-      );
-      const questionCountInput = document.getElementById(
-        "question-count-input"
-      );
-      const selectAllTopicsCheckbox = document.getElementById(
-        "select-all-topics-checkbox"
-      );
-
-      // --- View Helpers ---
-      function showView(viewName) {
-        Object.values(views).forEach((v) => (v.style.display = "none"));
-        views[viewName].style.display = "block";
-        tutorButton.style.display =
-          viewName === "lesson" || viewName === "results" ? "block" : "none";
-        window.scrollTo(0, 0);
-      }
-      window.showView = showView;
-
-      // --- Initialisation & Library Rendering ---
-      async function initializeAppForUser(user) {
-        currentUser = user;
-        const response = await fetch("/get_library_and_history", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_id: currentUser.uid }),
-        });
-        const data = await response.json();
-        libraryData = data.library;
-        const finalQuizHistory = data.final_quiz_history || [];
-
-        const finalQuizHistoryHtml =
-          finalQuizHistory.length > 0
-            ? `
-            <div id="final-quiz-history" style="margin-top: 2em;">
-                <h3>Final Quiz History</h3>
-                <ul id="final-quiz-history-list">${finalQuizHistory
-                  .map(
-                    (h) => `
-                    <li class="attempt-item" onclick="reviewFinalQuiz('${
-                      h.attempt_id
-                    }')">
-                        <strong>${h.title}</strong><br>
-                        Score: ${
-                          h.score !== null
-                            ? `${h.score}/${h.questions_total}`
-                            : "In Progress"
-                        }<br>
-                        <small>Taken on: ${new Date(
-                          h.started_at
-                        ).toLocaleString()}</small>
-                    </li>
-                `
-                  )
-                  .join("")}</ul>
-            </div>
-        `
-            : "";
-
-        views.library.innerHTML = `
-            <h2>Lesson Library</h2>
-            <p>Select a topic to begin or review your history.</p>
-            <ul id="lesson-list">${libraryData
-              .map((topic) => {
-                const startedIndicator =
-                  topic.attempts.length > 0
-                    ? '<span class="lesson-item-indicator">✔ Started</span>'
-                    : "";
-                return `<li class="lesson-item" onclick="showTopicDetail('${topic.id}')">${topic.title} ${startedIndicator}</li>`;
-              })
-              .join("")}</ul>
-            <button id="final-quiz-button">Take a Final Quiz</button>
-            ${finalQuizHistoryHtml}
-        `;
-        document
-          .getElementById("final-quiz-button")
-          .addEventListener("click", showFinalQuizModal);
-        showView("library");
-      }
-
-      function showTopicDetail(topicId) {
-        currentLessonId = topicId;
-        const topic = libraryData.find((t) => t.id === topicId);
-        if (!topic) return;
-        let historyHtml =
-          topic.attempts.length > 0
-            ? topic.attempts
-                .map(
-                  (h) => `
-            <li class="attempt-item" onclick="reviewLesson('${h.attempt_id}')">
-                <strong>${h.title}</strong><br>
-                Score: ${
-                  h.score !== null
-                    ? `${h.score}/${h.questions_total}`
-                    : "In Progress"
-                }
-                <br>
-                <small>Taken on: ${new Date(
-                  h.started_at
-                ).toLocaleString()}</small>
-            </li>`
-                )
-                .join("")
-            : "<p>You have no history for this topic yet.</p>";
-        views.topicDetail.innerHTML = `
-            <button onclick="showView('library')">← Back to Library</button>
-            <h2 style="margin-top: 1em;">${topic.title}</h2>
-            <button onclick="startLesson('${topic.id}')">Start New Attempt</button>
-            <hr style="margin: 2em 0;">
-            <h3>Your Previous Attempts</h3>
-            <ul>${historyHtml}</ul>`;
-        showView("topicDetail");
-      }
-      window.showTopicDetail = showTopicDetail;
-
-      // --- Lesson Attempt Flow ---
-      async function startLesson(lessonId, originalAttemptId = null) {
-        views.lesson.innerHTML =
-          "<h2>Loading Lesson...</h2><p>Please wait...</p>";
-        showView("lesson");
-        try {
-          const payload = { user_id: currentUser.uid, lesson_id: lessonId };
-          if (originalAttemptId)
-            payload.original_attempt_id = originalAttemptId;
-          const response = await fetch("/start_lesson", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          currentAttemptId = data.attempt_id;
-          currentLessonId = data.lesson_id;
-          currentLessonContext = data.content;
-          renderLessonTakingView(data.content);
-        } catch (error) {
-          views.lesson.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.startLesson = startLesson;
-
-      async function startMultiConceptLesson(concepts, parentLessonId) {
-        views.lesson.innerHTML =
-          "<h2>Generating Focused Lesson...</h2><p>Synthesizing a new lesson based on your weak points, please wait...</p>";
-        showView("lesson");
-        try {
-          const response = await fetch("/start_multi_concept_lesson", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              concepts: concepts,
-              parent_lesson_id: parentLessonId,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          currentAttemptId = data.attempt_id;
-          currentLessonId = data.lesson_id;
-          currentLessonContext = data.content;
-          renderLessonTakingView(data.content);
-        } catch (error) {
-          views.lesson.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.startMultiConceptLesson = startMultiConceptLesson;
-
-      async function submitQuiz() {
-        const form = document.getElementById("quiz-form");
-        const formData = new FormData(form);
-        const userAnswers = Object.fromEntries(formData.entries());
-        views.results.innerHTML = "<h2>Scoring Quiz...</h2>";
-        showView("results");
-        try {
-          const response = await fetch("/submit_quiz", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              attempt_id: currentAttemptId,
-              user_answers: userAnswers,
-              lesson_id: currentLessonId,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          currentLessonContext = data.content;
-          renderResultsView(data, currentAttemptId);
-        } catch (error) {
-          views.results.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.submitQuiz = submitQuiz;
-
-      async function reviewLesson(attemptId) {
-        views.results.innerHTML = "<h2>Loading History...</h2>";
-        showView("results");
-        try {
-          const response = await fetch("/get_lesson_attempt", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              attempt_id: attemptId,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          currentLessonContext = data.content;
-          currentLessonId = data.lesson_id;
-          renderResultsView(data, attemptId);
-        } catch (error) {
-          views.results.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.reviewLesson = reviewLesson;
-
-      async function deleteAttempt(attemptId, lessonId) {
-        if (
-          !confirm("Are you sure you want to permanently delete this attempt?")
-        )
-          return;
-        try {
-          await fetch("/delete_attempt", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              attempt_id: attemptId,
-            }),
-          });
-          await initializeAppForUser(currentUser);
-          showTopicDetail(lessonId);
-        } catch (error) {
-          alert("Error deleting attempt: " + error.message);
-        }
-      }
-      window.deleteAttempt = deleteAttempt;
-
-      // --- Renderers ---
-      function renderLessonTakingView(content) {
-        const shuffledQuestions = [...content.quiz_questions].sort(
-          () => Math.random() - 0.5
-        );
-
-        const quizHtml = shuffledQuestions
-          .map((q, index) => {
-            const originalIndex = content.quiz_questions.indexOf(q);
-
-            // ✅ Ensure options is an array
-            const optionsArray = normalizeOptions(q.options);
-
-            const optionsHtml = optionsArray
-              .map(
-                (option, optIndex) =>
-                  `<label><input type="radio" name="${originalIndex}" value="${optIndex}" required><span>${option}</span></label>`
-              )
-              .join("");
-
-            return `<div class="quiz-question"><h4>${index + 1}. ${
-              q.question
-            }</h4><div class="quiz-options">${optionsHtml}</div></div>`;
-          })
-          .join("");
-
-        views.lesson.innerHTML = `
-            <div>${content.lesson_html}</div>
-            <form id="quiz-form"><h3>Check Your Understanding</h3>${quizHtml}<button type="button" onclick="submitQuiz()">Submit & Score My Quiz</button></form>
-            <button class="back-to-library" onclick="showTopicDetail('${currentLessonId}')" style="margin-top: 1em; background-color: #6c757d;">Cancel and Go Back</button>`;
-      }
-
-      function renderResultsView(data, attemptId) {
-        const {
-          lesson_id,
-          content,
-          user_answers,
-          score,
-          questions_total,
-          smart_focus,
-        } = data;
-        let lessonAccordionHtml = `<details class="lesson-accordion"><summary>Click to review original lesson</summary><div>${content.lesson_html}</div></details>`;
-        let resultsHtml =
-          `<h2>Reviewing: ${content.title || "Lesson"}</h2>` +
-          lessonAccordionHtml +
-          `<hr style="margin: 2em 0;" /><div id="quiz-anchor"></div><div class="results-summary"><h3>Your Score: ${score} / ${questions_total}</h3></div>`;
-        resultsHtml += content.quiz_questions
-          .map((q, index) => {
-            const userAnswer = user_answers[String(index)];
-
-            // ✅ Ensure options is an array
-            const optionsArray = normalizeOptions(q.options);
-
-            const optionsHtml = optionsArray
-              .map((option, optIndex) => {
-                let className = "option",
-                  icon = "⚪";
-                if (optIndex === q.correct_answer_index) {
-                  className += " correct";
-                  icon = "✅";
-                } else if (String(optIndex) === userAnswer) {
-                  className += " incorrect-selection";
-                  icon = "❌";
-                }
-                return `<div class="${className}"><span class="icon">${icon}</span> ${option}</div>`;
-              })
-              .join("");
-            return `<div class="results-question"><h4>${index + 1}. ${
-              q.question
-            }</h4><div class="results-options">${optionsHtml}</div><div class="explanation"><strong>Explanation:</strong> ${
-              q.explanation
-            }</div></div>`;
-          })
-          .join("");
-
-        if (
-          smart_focus &&
-          smart_focus.smart_focus_needed &&
-          smart_focus.missed_concepts.length > 0
-        ) {
-          const conceptsHtmlList = smart_focus.missed_concepts
-            .map((concept) => `<li><strong>${concept}</strong></li>`)
-            .join("");
-
-          resultsHtml += `
-                <div class="smart-focus-prompt">
-                    <h3>💡 Smart Focus Opportunity</h3>
-                    <p>It looks like you had some trouble with the following concepts:</p>
-                    <ul>${conceptsHtmlList}</ul>
-                    <hr>
-                    <p><strong>Here's a quick refresher:</strong> ${smart_focus.explanation}</p>
-                    <button id="generate-focus-lesson-btn">Generate a lesson on these concepts</button>
-                </div>`;
-        }
-
-        resultsHtml += `
-            <div class="results-actions">
-                <button onclick="showTopicDetail('${lesson_id}')">← Back to Topic</button>
-                <button onclick="startLesson('${lesson_id}', '${attemptId}')">Retake Quiz</button>
-                <button class="delete-btn" onclick="deleteAttempt('${attemptId}', '${lesson_id}')">Delete This Attempt</button>
-            </div>`;
-
-        views.results.innerHTML = resultsHtml;
-
-        const generateBtn = document.getElementById(
-          "generate-focus-lesson-btn"
-        );
-        if (generateBtn) {
-          generateBtn.addEventListener("click", () => {
-            startMultiConceptLesson(smart_focus.missed_concepts, lesson_id);
-          });
-        }
-
-        document.getElementById("quiz-anchor")?.scrollIntoView();
-      }
-
-      // --- Auth Controls ---
-      document
-        .getElementById("login-btn")
-        .addEventListener("click", () =>
-          signInWithPopup(auth, new GoogleAuthProvider())
-        );
-      document.getElementById("logout-btn").addEventListener("click", (e) => {
-        e.preventDefault();
-        signOut(auth);
-      });
-      onAuthStateChanged(auth, async (user) => {
-        loginContainer.style.display = user ? "none" : "block";
-        appContainer.style.display = user ? "block" : "none";
-        if (user) {
-          const response = await fetch("/create_user", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              uid: user.uid,
-              displayName: user.displayName,
-              email: user.email,
-            }),
-          });
-          const userData = await response.json();
-          if (userData.needs_onboarding) {
-            window.location.href = "/onboarding";
-            return;
-          }
-          userNameSpan.innerText = user.displayName || "User";
-          initializeAppForUser(user);
-        } else {
-          currentUser = null;
-          libraryData = [];
-        }
-      });
-
-      // --- Final Quiz Logic (unchanged except for earlier normalisation already present) ---
-      function showFinalQuizModal() {
-        topicSelectionList.innerHTML = libraryData
-          .map(
-            (topic) => `
-            <label>
-                <input type="checkbox" name="final-quiz-topic" value="${topic.id}">
-                ${topic.title}
-            </label>
-        `
-          )
-          .join("");
-        finalQuizModal.style.display = "flex";
-      }
-
-      function hideFinalQuizModal() {
-        finalQuizModal.style.display = "none";
-      }
-
-      async function generateFinalQuiz() {
-        const selectedTopics = Array.from(
-          document.querySelectorAll('input[name="final-quiz-topic"]:checked')
-        ).map((cb) => cb.value);
-        const questionCount = parseInt(questionCountInput.value, 10);
-
-        if (selectedTopics.length < 1) {
-          alert("Please select at least one topic for the quiz.");
-          return;
-        }
-        if (questionCount < 5 || questionCount > 20) {
-          alert("Please request between 5 and 20 questions.");
-          return;
-        }
-
-        hideFinalQuizModal();
-        views.finalQuiz.innerHTML = `<h2>Generating Final Quiz...</h2><p>Please wait while we create your cumulative quiz from the selected topics.</p>`;
-        showView("finalQuiz");
-
-        try {
-          const response = await fetch("/generate_final_quiz", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              topic_ids: selectedTopics,
-              question_count: questionCount,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          currentAttemptId = data.attempt_id;
-          currentFinalQuizQuestions = data.quiz_questions;
-          renderFinalQuizView(currentFinalQuizQuestions);
-        } catch (error) {
-          views.finalQuiz.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-
-      function renderFinalQuizView(questions) {
-        const shuffledQuestions = [...questions].sort(
-          () => Math.random() - 0.5
-        );
-        const quizHtml = shuffledQuestions
-          .map((q, index) => {
-            const originalIndex = questions.indexOf(q);
-
-            // Already normalised earlier
-            const optionsArray = normalizeOptions(q.options);
-
-            const optionsHtml = optionsArray
-              .map(
-                (option, optIndex) =>
-                  `<label><input type="radio" name="${originalIndex}" value="${optIndex}" required><span>${option}</span></label>`
-              )
-              .join("");
-
-            return `<div class="quiz-question"><h4>${index + 1}. ${
-              q.question
-            }</h4><div class="quiz-options">${optionsHtml}</div></div>`;
-          })
-          .join("");
-
-        views.finalQuiz.innerHTML = `
-            <h2>Cumulative Final Quiz</h2>
-            <form id="final-quiz-form">
-                ${quizHtml}
-                <button type="button" onclick="submitFinalQuiz()">Submit Final Quiz</button>
-            </form>
-            <button class="back-to-library" onclick="showView('library')" style="margin-top: 1em; background-color: #6c757d;">Cancel and Go Back</button>`;
-      }
-      window.renderFinalQuizView = renderFinalQuizView;
-
-      async function submitFinalQuiz() {
-        const form = document.getElementById("final-quiz-form");
-        const formData = new FormData(form);
-        const userAnswers = Object.fromEntries(formData.entries());
-
-        views.finalQuiz.innerHTML = "<h2>Scoring Final Quiz...</h2>";
-        showView("finalQuiz");
-
-        try {
-          const response = await fetch("/submit_final_quiz", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              attempt_id: currentAttemptId,
-              user_answers: userAnswers,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          renderFinalQuizResults(data, currentAttemptId);
-        } catch (error) {
-          views.finalQuiz.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.submitFinalQuiz = submitFinalQuiz;
-
-      function renderFinalQuizResults(data, attemptId) {
-        const { user_answers, score, questions_total, quiz_questions, title } =
-          data;
-        let resultsHtml = `
-            <h2>Final Quiz Results: ${title}</h2>
-            <div class="results-summary"><h3>Your Score: ${score} / ${questions_total}</h3></div>
-        `;
-        resultsHtml += quiz_questions
-          .map((q, index) => {
-            const userAnswer = user_answers[String(index)];
-
-            const optionsArray = normalizeOptions(q.options);
-
-            const optionsHtml = optionsArray
-              .map((option, optIndex) => {
-                let className = "option",
-                  icon = "⚪";
-                if (optIndex === q.correct_answer_index) {
-                  className += " correct";
-                  icon = "✅";
-                } else if (String(optIndex) === userAnswer) {
-                  className += " incorrect-selection";
-                  icon = "❌";
-                }
-                return `<div class="${className}"><span class="icon">${icon}</span> ${option}</div>`;
-              })
-              .join("");
-
-            return `<div class="results-question"><h4>${index + 1}. ${
-              q.question
-            }</h4><div class="results-options">${optionsHtml}</div><div class="explanation"><strong>Explanation:</strong> ${
-              q.explanation
-            }</div></div>`;
-          })
-          .join("");
-
-        resultsHtml += `
-            <div class="results-actions">
-                <button onclick="showView('library')">← Back to Library</button>
-                <button onclick="retakeFinalQuiz('${attemptId}')">Retake This Quiz</button>
-            </div>`;
-        views.finalQuiz.innerHTML = resultsHtml;
-        window.scrollTo(0, 0);
-      }
-      window.renderFinalQuizResults = renderFinalQuizResults;
-
-      async function reviewFinalQuiz(attemptId) {
-        views.finalQuiz.innerHTML = "<h2>Loading Final Quiz History...</h2>";
-        showView("finalQuiz");
-        try {
-          const response = await fetch("/get_final_quiz_attempt", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              attempt_id: attemptId,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          renderFinalQuizResults(data, attemptId);
-        } catch (error) {
-          views.finalQuiz.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.reviewFinalQuiz = reviewFinalQuiz;
-
-      async function retakeFinalQuiz(originalAttemptId) {
-        views.finalQuiz.innerHTML = `<h2>Reloading Quiz...</h2><p>Please wait.</p>`;
-        showView("finalQuiz");
-        try {
-          const response = await fetch("/retake_final_quiz", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              user_id: currentUser.uid,
-              original_attempt_id: originalAttemptId,
-            }),
-          });
-          const data = await response.json();
-          if (data.error) throw new Error(data.error);
-          currentAttemptId = data.attempt_id;
-          currentFinalQuizQuestions = data.quiz_questions;
-          renderFinalQuizView(currentFinalQuizQuestions);
-        } catch (error) {
-          views.finalQuiz.innerHTML = `<h2>Error</h2><p>${error.message}</p><button onclick="showView('library')">Back to Library</button>`;
-        }
-      }
-      window.retakeFinalQuiz = retakeFinalQuiz;
-
-      generateFinalQuizBtn.addEventListener("click", generateFinalQuiz);
-      cancelFinalQuizBtn.addEventListener("click", hideFinalQuizModal);
-
-      selectAllTopicsCheckbox.addEventListener("change", (event) => {
-        const checkboxes = document.querySelectorAll(
-          'input[name="final-quiz-topic"]'
-        );
-        checkboxes.forEach((checkbox) => {
-          checkbox.checked = event.target.checked;
-        });
-      });
-
-      // --- Tutor Logic ---
-      function toggleTutor() {
-        const isHidden =
-          tutorChatContainer.style.display === "none" ||
-          tutorChatContainer.style.display === "";
-        tutorChatContainer.style.display = isHidden ? "flex" : "none";
-      }
-      window.toggleTutor = toggleTutor;
-
-      function addMessageToHistory(message, type) {
-        const messageDiv = document.createElement("div");
-        messageDiv.className = `chat-message ${type}-message`;
-        messageDiv.innerText = message;
-        tutorChatHistory.appendChild(messageDiv);
-        tutorChatHistory.scrollTop = tutorChatHistory.scrollHeight;
-      }
-      window.addMessageToHistory = addMessageToHistory;
-
-      async function sendTutorMessage() {
-        const question = tutorInput.value.trim();
-        if (!question || !currentLessonContext) return;
-        addMessageToHistory(question, "user");
-        tutorInput.value = "";
-        addMessageToHistory("Typing...", "tutor");
-        try {
-          const response = await fetch("/ask_tutor", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              question: question,
-              context: JSON.stringify(currentLessonContext),
-            }),
-          });
-          const data = await response.json();
-          tutorChatHistory.removeChild(tutorChatHistory.lastChild);
-          addMessageToHistory(data.answer, "tutor");
-        } catch (error) {
-          tutorChatHistory.removeChild(tutorChatHistory.lastChild);
-          addMessageToHistory("Sorry, I had trouble connecting.", "tutor");
-        }
-      }
-      window.sendTutorMessage = sendTutorMessage;
-
-      tutorInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
-          sendTutorMessage();
-        }
-      });
-    </script>
+    <!-- ───── APP SCRIPTS ─────────────────────────────────────────────── -->
+    <!-- All interactive logic now lives in static/js/main.js -->
+    <script
+      type="module"
+      src="{{ url_for('static', filename='js/main.js') }}"
+    ></script>
   </body>
 </html>
 
