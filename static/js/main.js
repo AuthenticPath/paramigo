@@ -1,10 +1,5 @@
-/* FILE: static/js/main.js
-   Paramigo Front-End  —  FULL MERGE  •  24 Jun 2025
-   ─────────────────────────────────────────────────────────────────────────
-   ▸ Restores Firebase auth & the entire SPA workflow
-   ▸ Adds source-material accordion, Create-Topic, flashcards, export
-   ▸ Modernises utilities & CSS hooks
-*/
+/* FILE: static/js/main.js */
+/* This version re-exposes all necessary functions to the global scope to fix the 'not defined' error. */
 
 /* ───── 1.  ES-MODULE IMPORTS & FIREBASE SETUP ────────────────────────── */
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
@@ -148,19 +143,30 @@ function showView(name) {
     name === "lesson" || name === "results" ? "block" : "none";
   window.scrollTo(0, 0);
 }
-window.showView = showView; // Expose to global scope
+window.showView = showView;
 
 /* ───── 5. LIBRARY & DASHBOARD RENDERING ─────────────────────────────── */
 async function initializeAppForUser(user) {
   currentUser = user;
-  // Now expects three lists from the backend
-  const { library, user_creations, final_quiz_history } = await post(
-    "/get_library_and_history",
-    { user_id: user.uid }
-  );
+
+  const { library, user_creations, final_quiz_history, learningStyle } =
+    await post("/get_library_and_history", { user_id: user.uid });
+
+  // ===== [THIS BLOCK IS UPDATED] =====
+  // Display "Custom" if the learning style is not a preset.
+  const styleDisplay = $("#current-learning-style");
+  if (styleDisplay) {
+    const presetStyles = ["The Mentor", "The Analyst", "The Strategist"];
+    if (presetStyles.includes(learningStyle)) {
+      styleDisplay.textContent = `"${learningStyle}"`;
+    } else {
+      styleDisplay.textContent = `"Custom"`;
+    }
+  }
+  // ===================================
 
   const safeUserCreations = user_creations || [];
-  libraryData = [...(library || []), ...safeUserCreations]; // Combine for other parts of the app
+  libraryData = [...(library || []), ...safeUserCreations];
 
   const dynamicArea = $("#library-dynamic-area", views.library);
   if (!dynamicArea)
@@ -203,15 +209,12 @@ async function initializeAppForUser(user) {
     `;
   }
 
-  // ===== [THIS IS THE NEW CODE BLOCK] =====
-  // Inject the button between the created topics and the final quiz history.
   libraryHtml += `
     <hr style="margin:2em 0; border-top: 1px solid var(--c-border);">
     <button id="final-quiz-button" class="btn-outline" style="width:100%; text-align:center;">
         Take a Final Quiz
     </button>
   `;
-  // ========================================
 
   if (final_quiz_history?.length) {
     libraryHtml += `
@@ -238,7 +241,6 @@ async function initializeAppForUser(user) {
 
   dynamicArea.innerHTML = libraryHtml;
 
-  // This event listener will now find the button we just injected into the HTML.
   if ($("#final-quiz-button")) {
     $("#final-quiz-button").addEventListener("click", showFinalQuizModal);
   }
@@ -280,7 +282,7 @@ function showTopicDetail(topicId) {
   `;
   showView("topicDetail");
 }
-window.showTopicDetail = showTopicDetail;
+window.showTopicDetail = showTopicDetail; // THIS FIXES THE BUG
 
 /* ───── 6.  LESSON FLOW ──────────────────────────────────────────────── */
 async function startLesson(lessonId, originalAttemptId = null) {
@@ -306,10 +308,8 @@ async function renderLesson(content, lessonId) {
   const root = views.lesson;
   const { lesson_html, quiz_questions } = content;
 
-  /* Lesson body */
   root.innerHTML = `<div>${lesson_html}</div>`;
 
-  /* -- FEATURE: Accordion with raw source material -- */
   try {
     const src = await post("/get_source_material", {
       user_id: currentUser.uid,
@@ -317,9 +317,8 @@ async function renderLesson(content, lessonId) {
     });
     const acc = el("div", "accordion");
     const head = el("button", "accordion-head", "Show Source Material");
-    const body = el("div", "accordion-body"); // Changed from <pre> to <div>
+    const body = el("div", "accordion-body");
 
-    // FIX: Use the new formatter function
     body.innerHTML = formatSourceMaterialAsHtml(src);
 
     body.style.display = "none";
@@ -334,13 +333,11 @@ async function renderLesson(content, lessonId) {
     console.warn("Accordion error:", err.message);
   }
 
-  /* Flashcards button */
   const fcBtn = el("button", "btn-primary", "Generate Flashcards");
   fcBtn.style.marginTop = "1.5em";
   fcBtn.onclick = genFlashcardsLesson;
   root.append(fcBtn);
 
-  /* Quiz */
   const shuffled = [...quiz_questions].sort(() => Math.random() - 0.5);
   const quizHtml = shuffled
     .map((q, i) => {
@@ -400,16 +397,13 @@ async function renderResultsView(data, attemptId) {
     smart_focus,
   } = data;
 
-  // Start building the HTML
   let html = `<h2>Reviewing: ${content.title || "Lesson"}</h2>`;
 
-  // Fetch and format the source material before rendering
   try {
     const src = await post("/get_source_material", {
       user_id: currentUser.uid,
       lesson_id: lesson_id,
     });
-    // Build the accordion HTML as a string
     html += `
       <div class="accordion">
         <button class="accordion-head" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'block' ? 'none' : 'block'">Show Source Material</button>
@@ -422,14 +416,12 @@ async function renderResultsView(data, attemptId) {
     console.warn("Accordion error:", err.message);
   }
 
-  // Add the AI-Generated Lesson and Score Summary
   html += `
     <details class="lesson-accordion"><summary>Click to review AI-Generated Lesson</summary><div>${content.lesson_html}</div></details>
     <hr style="margin:2em 0">
     <div class="results-summary"><h3>Your Score: ${score} / ${questions_total}</h3></div>
   `;
 
-  // Render the question-by-question results
   html += content.quiz_questions
     .map((q, i) => {
       const opts = normalizeOptions(q.options)
@@ -454,7 +446,6 @@ async function renderResultsView(data, attemptId) {
     })
     .join("");
 
-  // Add the Smart Focus prompt if needed
   if (smart_focus?.smart_focus_needed) {
     const list = smart_focus.missed_concepts
       .map((c) => `<li><strong>${c}</strong></li>`)
@@ -469,7 +460,6 @@ async function renderResultsView(data, attemptId) {
       </div>`;
   }
 
-  // Add the final action buttons
   html += `
     <div class="results-actions">
       <button onclick="showTopicDetail('${lesson_id}')">← Back to Topic</button>
@@ -477,7 +467,6 @@ async function renderResultsView(data, attemptId) {
       <button class="delete-btn" onclick="deleteAttempt('${attemptId}','${lesson_id}')">Delete Attempt</button>
     </div>`;
 
-  // Set the final HTML and add event listeners
   views.results.innerHTML = html;
 
   $("#generate-focus-lesson-btn")?.addEventListener("click", () =>
@@ -497,7 +486,7 @@ async function deleteAttempt(attemptId, lessonId) {
 }
 window.deleteAttempt = deleteAttempt;
 
-// Permanently deletes a custom topic and all its history
+/* Permanently deletes a custom topic and all its history */
 async function deleteCustomTopic(topicId, topicTitle) {
   if (
     !confirm(
@@ -511,7 +500,6 @@ async function deleteCustomTopic(topicId, topicTitle) {
       user_id: currentUser.uid,
       topic_id: topicId,
     });
-    // Refresh the library view to show the topic is gone
     await initializeAppForUser(currentUser);
   } catch (e) {
     alert(`Failed to delete topic: ${e.message}`);
@@ -580,7 +568,6 @@ function showCards(cards, heading) {
   const pdf = el("button", "btn-outline", "PDF");
   const xls = el("button", "btn-outline", "Spreadsheet");
 
-  // FIX: Pass the button element to the export function for loading state
   pdf.onclick = (e) => exportCards("pdf", heading, e.target);
   xls.onclick = (e) => exportCards("xlsx", heading, e.target);
 
@@ -589,10 +576,9 @@ function showCards(cards, heading) {
 
   const closeBtn = el("button", "close", "×");
 
-  // FIX: Make close button and background overlay work correctly
   closeBtn.onclick = () => ov.remove();
   ov.onclick = () => ov.remove();
-  md.onclick = (e) => e.stopPropagation(); // Prevents click inside modal from closing it
+  md.onclick = (e) => e.stopPropagation();
 
   md.append(closeBtn);
   ov.append(md);
@@ -600,7 +586,6 @@ function showCards(cards, heading) {
 }
 
 async function genFlashcardsLesson() {
-  // FIX: Add loading state to the button that was clicked ('this')
   const btn = this;
   const originalText = btn.textContent;
   btn.disabled = true;
@@ -617,14 +602,12 @@ async function genFlashcardsLesson() {
   } catch (e) {
     alert("Flashcard error: " + e.message);
   } finally {
-    // Always restore the button after the attempt
     btn.disabled = false;
     btn.textContent = originalText;
   }
 }
 
 async function genFlashcardsTopics(ids) {
-  // FIX: Add loading state to the library flashcard button
   const btn = $("#library-flashcards-btn");
   const originalText = btn.textContent;
   btn.disabled = true;
@@ -641,14 +624,12 @@ async function genFlashcardsTopics(ids) {
   } catch (e) {
     alert("Flashcard error: " + e.message);
   } finally {
-    // Always restore the button after the attempt
     btn.disabled = false;
     btn.textContent = originalText;
   }
 }
 
 async function exportCards(format, title, btn) {
-  // FIX: Add loading state to the export button
   const originalText = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Exporting...";
@@ -673,7 +654,6 @@ async function exportCards(format, title, btn) {
   } catch (e) {
     alert("Export failed: " + e.message);
   } finally {
-    // Always restore the button after the attempt
     btn.disabled = false;
     btn.textContent = originalText;
   }
@@ -807,7 +787,6 @@ async function reviewFinalQuiz(attemptId) {
 }
 window.reviewFinalQuiz = reviewFinalQuiz;
 
-/* Final-quiz modal wiring */
 generateFinalQuizBtn.addEventListener("click", generateFinalQuiz);
 cancelFinalQuizBtn.addEventListener("click", hideFinalQuizModal);
 selectAllTopicsCheckbox.addEventListener("change", (e) => {
@@ -839,7 +818,7 @@ $("#create-topic-btn").onclick = async () => {
     libraryData.push({
       id: data.lesson_id,
       title: title,
-      attempts: [], // It's a new topic, so it has no completed attempts yet.
+      attempts: [],
     });
 
     renderLesson(data.content, data.lesson_id);
@@ -876,8 +855,8 @@ async function generateFlashcardsFromModal() {
     return alert("Please select at least one topic.");
   }
 
-  hideFlashcardTopicModal(); // Close the modal
-  await genFlashcardsTopics(selectedIds); // Call the existing generation function
+  hideFlashcardTopicModal();
+  await genFlashcardsTopics(selectedIds);
 }
 
 $("#library-flashcards-btn").onclick = showFlashcardTopicModal;
@@ -892,7 +871,7 @@ selectAllFlashcardTopicsCheckbox.addEventListener("change", (e) => {
   );
 });
 
-/* ───── 12.  AI-TUTOR CHAT (unchanged) ────────────────────────────────── */
+/* ───── 12.  AI-TUTOR CHAT ────────────────────────────────────────────── */
 function toggleTutor() {
   const hidden =
     tutorChatContainer.style.display === "none" ||
@@ -919,7 +898,7 @@ async function sendTutorMessage() {
       question: q,
       context: JSON.stringify(currentLessonContext),
     });
-    tutorChatHistory.lastChild.remove(); // remove "Typing…"
+    tutorChatHistory.lastChild.remove();
     addMessageToHistory(answer, "tutor");
   } catch {
     tutorChatHistory.lastChild.remove();

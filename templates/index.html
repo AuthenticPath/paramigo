@@ -14,27 +14,30 @@
   </head>
 
   <body>
-    <!-- ───── LOGIN GATE ─────────────────────────────────────────────── -->
+    <!-- ───── 1. LOGIN GATE ─────────────────────────────────────────────── -->
     <div id="login-container" class="page-container">
       <h1>Welcome to Paramigo</h1>
       <p>Please sign in to continue.</p>
       <button id="login-btn">Sign in with Google</button>
     </div>
 
-    <!-- ───── MAIN APP SHELL ──────────────────────────────────────────── -->
+    <!-- ───── 2. MAIN APP SHELL ──────────────────────────────────────────── -->
     <div id="app-container" style="display: none">
-      <!-- Top bar -->
+      <!-- ===== [THIS HEADER SECTION IS UPDATED] ===== -->
       <header class="page-container" style="padding-bottom: 0">
         <p>
           Hello, <span id="user-name"></span>!
           <a href="#" id="logout-btn" style="margin-left: 1em">(Sign Out)</a>
-          <a href="/onboarding" id="change-style-link" style="margin-left: 1em"
-            >(Change Learning Style)</a
-          >
+        </p>
+        <!-- The old "(Change Learning Style)" link was removed from the line above. -->
+        <!-- The following block is new. -->
+        <p style="font-size: 0.9em; color: #6b7280; margin-top: -0.5em">
+          Your learning style is set to: <b id="current-learning-style">...</b>
+          <a href="/onboarding" style="margin-left: 0.5em">(Change)</a>
         </p>
       </header>
+      <!-- ============================================= -->
 
-      <!-- Library / Topics -->
       <main id="lesson-library-view" class="page-container">
         <!-- Controls injected immediately for convenience -->
         <div class="library-controls" style="margin-bottom: 1em">
@@ -79,7 +82,7 @@
       ></main>
     </div>
 
-    <!-- ───── FLOATING AI-TUTOR CHAT ──────────────────────────────────── -->
+    <!-- ───── 3. FLOATING AI-TUTOR CHAT ──────────────────────────────────── -->
     <button id="tutor-button" style="display: none" onclick="toggleTutor()">
       Ask Tutor 💬
     </button>
@@ -96,7 +99,7 @@
       </div>
     </div>
 
-    <!-- ───── FINAL-QUIZ TOPIC-PICKER MODAL ───────────────────────────── -->
+    <!-- ───── 4. FINAL-QUIZ TOPIC-PICKER MODAL ───────────────────────────── -->
     <div id="final-quiz-modal" class="modal-backdrop">
       <div class="modal-content">
         <h2>Create a Cumulative Quiz</h2>
@@ -143,7 +146,7 @@
       </div>
     </div>
 
-    <!-- ───── FLASHCARD TOPIC-PICKER MODAL ────────────────────────── -->
+    <!-- ───── 5. FLASHCARD TOPIC-PICKER MODAL ────────────────────────── -->
     <div id="flashcard-topic-modal" class="modal-backdrop">
       <div class="modal-content">
         <h2>Generate Flashcards</h2>
@@ -180,7 +183,7 @@
       </div>
     </div>
 
-    <!-- ───── APP SCRIPTS ─────────────────────────────────────────────── -->
+    <!-- ───── 6. APP SCRIPTS ─────────────────────────────────────────────── -->
     <!-- All interactive logic now lives in static/js/main.js -->
     <script
       type="module"

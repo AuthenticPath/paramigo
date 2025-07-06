@@ -1,44 +1,57 @@
 <!-- FILE: templates/onboarding.html -->
-
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Welcome to Paramigo</title>
+    <title>Your Learning Style</title>
+
+    <!-- A single, clean style block -->
     <style>
       body {
-        font-family: sans-serif;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
         display: flex;
         justify-content: center;
-        align-items: center;
+        align-items: flex-start;
         min-height: 100vh;
         margin: 0;
         background-color: #f4f4f9;
         color: #333;
+        padding: 2em 0;
       }
       .container {
+        width: 90%;
         max-width: 800px;
         text-align: center;
         padding: 2em;
+        background: #fff;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
       }
       h1 {
         color: #0056b3;
       }
       .style-options {
         display: flex;
+        flex-wrap: wrap;
         gap: 1em;
         margin-top: 2em;
         text-align: left;
       }
       .style-box {
         flex: 1;
+        min-width: 200px;
         padding: 1.5em;
-        background-color: #fff;
-        border: 1px solid #ddd;
+        border: 2px solid #ddd;
         border-radius: 8px;
+        cursor: pointer;
+        transition: border-color 0.2s, box-shadow 0.2s;
         display: flex;
         flex-direction: column;
+      }
+      .style-box:hover {
+        border-color: #007bff;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
       }
       .style-box h3 {
         margin-top: 0;
@@ -48,65 +61,94 @@
         flex-grow: 1;
       }
       .custom-option {
-        margin-top: 2em;
+        margin-top: 2.5em;
+        text-align: left;
       }
       textarea {
         width: 100%;
-        padding: 0.5em;
+        padding: 0.75em;
         border-radius: 5px;
         border: 1px solid #ccc;
-        min-height: 60px;
+        min-height: 80px;
         box-sizing: border-box;
+        font-size: 1rem;
+        line-height: 1.5;
+      }
+      .main-actions {
+        margin-top: 1.5em;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 1em;
       }
       button {
         background-color: #007bff;
         color: white;
-        padding: 10px 15px;
+        padding: 12px 20px;
         border: none;
         border-radius: 5px;
         cursor: pointer;
-        margin-top: 1em;
+        font-size: 1rem;
+        transition: background-color 0.2s;
       }
       button:hover {
         background-color: #0056b3;
       }
+      button:disabled {
+        background-color: #aaa;
+        cursor: not-allowed;
+      }
+      a.back-link {
+        color: #6c757d;
+        text-decoration: none;
+      }
     </style>
   </head>
+
   <body>
+    <!-- A single, clean body structure -->
     <div class="container">
-      <h1>Let's Personalize Your Learning</h1>
+      <h1>Update Your Learning Style</h1>
       <p>
-        To help us tailor the content for you, please read the three
-        explanations of "compound interest" below.
-      </p>
-      <p>
-        <strong>Which one makes the most sense to you?</strong>
+        Your current learning style is shown in the text box below. You can edit
+        it directly, or click one of the presets to use it as a starting point.
       </p>
 
+      <!-- The style boxes now act as buttons to populate the text area -->
       <div class="style-options">
         {% for style in styles %}
-        <div class="style-box">
+        <div class="style-box" onclick="selectPreset('{{ style.style_name }}')">
           <h3>{{ style.style_name }}</h3>
           <p>{{ style.explanation }}</p>
-          <button onclick="savePreference('{{ style.style_name }}')">
-            I like this style
-          </button>
         </div>
         {% endfor %}
       </div>
 
+      <!-- This is now the main editor for the learning style -->
       <div class="custom-option">
-        <p>Or, describe the style you prefer in your own words:</p>
+        <label for="custom-style-input"
+          ><strong
+            >Your Learning Style: (you can type in your own custom instructions
+            below...)</strong
+          ></label
+        >
         <textarea
           id="custom-style-input"
-          placeholder="e.g., 'Explain it to me like I'm five' or 'Give me only the bullet points'"
+          placeholder="Loading your style..."
         ></textarea>
-        <button onclick="saveCustomPreference()">Save My Preference</button>
+      </div>
+
+      <!-- A single, clear action bar -->
+      <div class="main-actions">
+        <a href="/" class="back-link">← Go Back Without Saving</a>
+        <button onclick="saveAndExit()">Save & Return to App</button>
       </div>
     </div>
 
+    <!-- A single, consolidated script block -->
     <script type="module">
-      // Import only what we need for this page
+      // Import Firebase tools
       import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
       import {
         getAuth,
@@ -128,52 +170,82 @@
       const auth = getAuth(app);
 
       let currentUser = null;
+      const customStyleInput = document.getElementById("custom-style-input");
+      const saveButton = document.querySelector(".main-actions button");
 
-      // We need to know who the current user is to save their preference
+      // Fetches the user's current style and populates the text box
+      async function loadCurrentUserStyle() {
+        if (!currentUser) return;
+
+        try {
+          const response = await fetch("/get_user_profile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id: currentUser.uid }),
+          });
+          if (!response.ok) throw new Error("Failed to fetch profile");
+
+          const profile = await response.json();
+          const currentStyle = profile.learningStyle || "";
+          customStyleInput.value = currentStyle;
+        } catch (error) {
+          console.error("Error loading user style:", error);
+          customStyleInput.value =
+            "Could not load your style. Please enter it here.";
+        }
+      }
+
+      // Runs when a user clicks one of the three preset boxes
+      window.selectPreset = function (styleName) {
+        customStyleInput.value = styleName;
+      };
+
+      // The one and only save function for this page
+      window.saveAndExit = async function () {
+        if (!currentUser) {
+          alert("Error: Not signed in.");
+          return;
+        }
+
+        const newStyle = customStyleInput.value.trim();
+        if (!newStyle) {
+          alert("Please enter a description of your preferred style.");
+          return;
+        }
+
+        // Disable button to prevent double-clicks
+        saveButton.disabled = true;
+        saveButton.textContent = "Saving...";
+
+        try {
+          await fetch("/save_preference", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              uid: currentUser.uid,
+              style: newStyle,
+            }),
+          });
+          // After saving, send them to the main app page
+          window.location.href = "/";
+        } catch (error) {
+          alert(`Error saving your style: ${error.message}`);
+          // Re-enable button on failure
+          saveButton.disabled = false;
+          saveButton.textContent = "Save & Return to App";
+        }
+      };
+
+      // When the page loads, check for auth status and then load the user's style
       onAuthStateChanged(auth, (user) => {
         if (user) {
           currentUser = user;
+          loadCurrentUserStyle();
         } else {
           // If for some reason they land here without being logged in, send them home.
           window.location.href = "/";
         }
       });
-
-      // This function will be called when the user clicks one of the three buttons
-      window.savePreference = async function (styleName) {
-        if (!currentUser) {
-          alert("Error: Not signed in.");
-          return;
-        }
-
-        await fetch("/save_preference", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            uid: currentUser.uid,
-            style: styleName,
-          }),
-        });
-
-        // After saving, send them to the main app page
-        window.location.href = "/";
-      };
-
-      // This function handles the custom text input
-      window.saveCustomPreference = async function () {
-        if (!currentUser) {
-          alert("Error: Not signed in.");
-          return;
-        }
-
-        const customStyle = document.getElementById("custom-style-input").value;
-        if (!customStyle.trim()) {
-          alert("Please enter a description of your preferred style.");
-          return;
-        }
-
-        await savePreference(customStyle); // We can reuse the same function
-      };
     </script>
   </body>
 </html>

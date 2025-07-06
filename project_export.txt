@@ -159,7 +159,7 @@ def onboarding():
     styles = [
         {"style_name": "The Mentor", "explanation": "Imagine you have a friendly, experienced guide. This style uses analogies and stories to explain concepts, focusing on the 'why' behind the advice. It's encouraging and patient."},
         {"style_name": "The Analyst", "explanation": "This style is for the data-driven learner. It presents information with a focus on numbers, charts, and logical steps. It's precise, structured, and prioritizes factual accuracy."},
-        {"style_name": "The Strategist", "explanation": "This style thinks about the big picture and long-term goals. It frames advice in the context of a client's overall financial plan and future objectives. It's forward-looking and outcome-oriented."}
+        {"style_name": "The Conversationalist", "explanation": "This style delivers lessons in the form of a dialogue between a learner and a teacher. It's relaxed, question-driven, and conversational — like a podcast or coaching session. Great for people who learn best by hearing both sides of an idea."}
     ]
     return render_template("onboarding.html", styles=styles)
 
@@ -171,7 +171,18 @@ def get_library_and_history():
     data = request.get_json()
     user_id = data.get("user_id")
     if not user_id: return jsonify({"error": "User ID is required."}), 400
-    
+
+    # --- NEW: Fetch user profile data at the same time ---
+    user_profile = {}
+    try:
+        user_ref = db.collection("Users").document(user_id)
+        user_doc = user_ref.get()
+        if user_doc.exists:
+            user_profile = user_doc.to_dict()
+    except Exception as e:
+        print(f"[get_library_and_history] Could not fetch user profile: {e}")
+    # --- END NEW ---
+
     # Fetch lesson attempt history
     lesson_history_docs = db.collection("Users").document(user_id).collection("lesson_attempts").order_by("started_at", direction=firestore.Query.DESCENDING).stream()
     history_by_lesson = {}
@@ -181,7 +192,7 @@ def get_library_and_history():
         if lesson_id not in history_by_lesson:
             history_by_lesson[lesson_id] = []
         history_by_lesson[lesson_id].append({"attempt_id": doc.id, "title": d.get("title"), "score": d.get("score"), "questions_total": d.get("questions_total"), "started_at": d.get("started_at").isoformat()})
-    
+
     # Fetch the main library content and separate it
     library_docs = db.collection("ContentMaster").stream()
     official_library = []
@@ -192,7 +203,6 @@ def get_library_and_history():
         if title:
             lesson_id = doc.id
             lesson_data = {"id": lesson_id, "title": title, "attempts": history_by_lesson.get(lesson_id, [])}
-            # NEW: Check for the ai_generated flag
             if doc_dict.get("ai_generated"):
                 user_creations.append(lesson_data)
             else:
@@ -210,11 +220,13 @@ def get_library_and_history():
             "questions_total": d.get("questions_total"),
             "started_at": d.get("started_at").isoformat()
         })
-    # Return two separate lists for the library
+        
+    # --- NEW: Return the user's learning style along with everything else ---
     return jsonify({
-        "library": official_library, 
-        "user_creations": user_creations, 
-        "final_quiz_history": final_quiz_history
+        "library": official_library,
+        "user_creations": user_creations,
+        "final_quiz_history": final_quiz_history,
+        "learningStyle": user_profile.get("learningStyle", "Not Set") # Add this line
     })
 
 @app.route("/get_lesson_attempt", methods=["POST"])
@@ -256,6 +268,26 @@ def get_source_material():
     except Exception as e:
         print(f"[get_source_material] Firestore error: {e}")
         return jsonify({"error": "Could not retrieve source material."}), 500
+    
+
+# ==== [1] GET USER PROFILE (This is the new function to add) ====
+@app.route("/get_user_profile", methods=["POST"])
+def get_user_profile():
+    data = request.get_json()
+    user_id = data.get("user_id")
+    if not user_id: 
+        return jsonify({"error": "User ID is required."}), 400
+    try:
+        user_ref = db.collection("Users").document(user_id)
+        user_doc = user_ref.get()
+        if user_doc.exists:
+            # We return the entire user document, which includes the 'learningStyle' key
+            return jsonify(user_doc.to_dict())
+        else:
+            return jsonify({"error": "User not found"}), 404
+    except Exception as e:
+        print(f"[get_user_profile] Firestore error: {e}")
+        return jsonify({"error": "Could not retrieve user profile."}), 500
 
 # ── USER/PROFILE API ─────────────────────────────────────────────────────────────
 @app.route("/create_user", methods=["POST"])
@@ -1421,16 +1453,24 @@ function showView(name) {
     name === "lesson" || name === "results" ? "block" : "none";
   window.scrollTo(0, 0);
 }
-window.showView = showView;
+window.showView = showView; // Expose to global scope
 
-/* ───── 5.  LIBRARY & DASHBOARD RENDERING ─────────────────────────────── */
+/* ───── 5. LIBRARY & DASHBOARD RENDERING ─────────────────────────────── */
 async function initializeAppForUser(user) {
   currentUser = user;
-  // Now expects three lists from the backend
-  const { library, user_creations, final_quiz_history } = await post(
-    "/get_library_and_history",
-    { user_id: user.uid }
-  );
+
+  // ===== [THIS LINE IS MODIFIED] =====
+  // Now expects four items from the backend, including the learning style
+  const { library, user_creations, final_quiz_history, learningStyle } =
+    await post("/get_library_and_history", { user_id: user.uid });
+
+  // ===== [THIS BLOCK IS NEW] =====
+  // Update the new learning style display in the header
+  const styleDisplay = $("#current-learning-style");
+  if (styleDisplay) {
+    styleDisplay.textContent = `"${learningStyle || "Not Set"}"`;
+  }
+  // ===============================
 
   const safeUserCreations = user_creations || [];
   libraryData = [...(library || []), ...safeUserCreations]; // Combine for other parts of the app
@@ -1476,9 +1516,17 @@ async function initializeAppForUser(user) {
     `;
   }
 
+  // Inject the button between the created topics and the final quiz history.
+  libraryHtml += `
+    <hr style="margin:2em 0; border-top: 1px solid var(--c-border);">
+    <button id="final-quiz-button" class="btn-outline" style="width:100%; text-align:center;">
+        Take a Final Quiz
+    </button>
+  `;
+
   if (final_quiz_history?.length) {
     libraryHtml += `
-      <hr style="margin:2em 0">
+      <hr style="margin:2em 0; border-top: 1px solid var(--c-border);">
       <h3>Final Quiz History</h3>
       <ul id="final-quiz-history-list">
         ${final_quiz_history
@@ -1501,48 +1549,13 @@ async function initializeAppForUser(user) {
 
   dynamicArea.innerHTML = libraryHtml;
 
-  // --- THIS IS THE FIX ---
-  // We re-add the event listener for the Final Quiz button, which was accidentally removed.
-  $("#final-quiz-button").addEventListener("click", showFinalQuizModal);
+  // This event listener will now find the button we just injected into the HTML.
+  if ($("#final-quiz-button")) {
+    $("#final-quiz-button").addEventListener("click", showFinalQuizModal);
+  }
 
   showView("library");
 }
-
-/* ── Topic detail ───────────────── */
-function showTopicDetail(topicId) {
-  currentLessonId = topicId;
-  const topic = libraryData.find((t) => t.id === topicId);
-  if (!topic) return;
-
-  const history = topic.attempts
-    .map(
-      (a) => `<li class="attempt-item" onclick="reviewLesson('${
-        a.attempt_id
-      }')">
-               <strong>${a.title}</strong><br>
-               Score: ${
-                 a.score !== null
-                   ? `${a.score}/${a.questions_total}`
-                   : "In Progress"
-               }<br>
-               <small>${new Date(a.started_at).toLocaleString()}</small>
-             </li>`
-    )
-    .join("");
-
-  views.topicDetail.innerHTML = `
-    <button onclick="showView('library')">← Back to Library</button>
-    <h2 style="margin-top:1em">${topic.title}</h2>
-    <button class="btn-primary" onclick="startLesson('${
-      topic.id
-    }')">Start New Attempt</button>
-    <hr style="margin:2em 0">
-    <h3>Your Previous Attempts</h3>
-    ${history || "<p>You have no history for this topic yet.</p>"}  
-  `;
-  showView("topicDetail");
-}
-window.showTopicDetail = showTopicDetail;
 
 /* ───── 6.  LESSON FLOW ──────────────────────────────────────────────── */
 async function startLesson(lessonId, originalAttemptId = null) {
@@ -1651,7 +1664,6 @@ async function submitQuiz() {
 }
 window.submitQuiz = submitQuiz;
 
-/* Render quiz RESULTS with Source Material Accordion */
 /* Render quiz RESULTS with Source Material Accordion */
 async function renderResultsView(data, attemptId) {
   const {
@@ -2004,6 +2016,8 @@ function renderFinalQuizView(questions) {
     </form>
     <button class="back-to-library" onclick="showView('library')" style="margin-top:1em;background:#6c757d">Cancel</button>`;
 }
+window.renderFinalQuizView = renderFinalQuizView;
+
 async function submitFinalQuiz() {
   const ans = Object.fromEntries(new FormData($("#final-quiz-form")).entries());
   views.finalQuiz.innerHTML = "<h2>Scoring…</h2>";
@@ -2019,6 +2033,8 @@ async function submitFinalQuiz() {
     views.finalQuiz.innerHTML = `<h2>Error</h2><p>${e.message}</p>`;
   }
 }
+window.submitFinalQuiz = submitFinalQuiz;
+
 function renderFinalQuizResults(data) {
   const { quiz_questions, user_answers, score, questions_total, title } = data;
   let html = `<h2>Final Quiz Results: ${title}</h2>
@@ -2051,9 +2067,6 @@ function renderFinalQuizResults(data) {
   html += `<button class="back-to-library" onclick="showView('library')" style="margin-top:2em">← Back to Library</button>`;
   views.finalQuiz.innerHTML = html;
 }
-window.renderFinalQuizView = renderFinalQuizView;
-
-// ** OMISSION FIXED: This function was missing in the previous response **
 async function reviewFinalQuiz(attemptId) {
   views.finalQuiz.innerHTML = "<h2>Loading Past Results...</h2>";
   showView("finalQuiz");
@@ -2098,10 +2111,6 @@ $("#create-topic-btn").onclick = async () => {
     currentLessonId = data.lesson_id;
     currentLessonContext = data.content;
 
-    // --- THIS IS THE FIX ---
-    // Manually add the new topic to our local libraryData array.
-    // This makes the "Cancel and Go Back" button work immediately without
-    // needing to re-fetch the entire library from the server.
     libraryData.push({
       id: data.lesson_id,
       title: title,
@@ -2130,12 +2139,10 @@ function showFlashcardTopicModal() {
   flashcardTopicModal.style.display = "flex";
 }
 
-// This new function hides the modal
 function hideFlashcardTopicModal() {
   flashcardTopicModal.style.display = "none";
 }
 
-// This new function runs when the user clicks "Generate Flashcards" INSIDE the modal
 async function generateFlashcardsFromModal() {
   const selectedIds = Array.from(
     $$('input[name="flashcard-topic"]:checked')
@@ -2148,12 +2155,7 @@ async function generateFlashcardsFromModal() {
   await genFlashcardsTopics(selectedIds); // Call the existing generation function
 }
 
-// --- Event Listeners to wire everything up ---
-
-// The main library button now calls the function to SHOW the modal
 $("#library-flashcards-btn").onclick = showFlashcardTopicModal;
-
-// The buttons inside the modal are now wired up
 generateFlashcardsBtnModal.addEventListener(
   "click",
   generateFlashcardsFromModal
@@ -2164,6 +2166,7 @@ selectAllFlashcardTopicsCheckbox.addEventListener("change", (e) => {
     (c) => (c.checked = e.target.checked)
   );
 });
+
 /* ───── 12.  AI-TUTOR CHAT (unchanged) ────────────────────────────────── */
 function toggleTutor() {
   const hidden =
@@ -2767,27 +2770,30 @@ input[type="checkbox"] {
   </head>
 
   <body>
-    <!-- ───── LOGIN GATE ─────────────────────────────────────────────── -->
+    <!-- ───── 1. LOGIN GATE ─────────────────────────────────────────────── -->
     <div id="login-container" class="page-container">
       <h1>Welcome to Paramigo</h1>
       <p>Please sign in to continue.</p>
       <button id="login-btn">Sign in with Google</button>
     </div>
 
-    <!-- ───── MAIN APP SHELL ──────────────────────────────────────────── -->
+    <!-- ───── 2. MAIN APP SHELL ──────────────────────────────────────────── -->
     <div id="app-container" style="display: none">
-      <!-- Top bar -->
+      <!-- ===== [THIS HEADER SECTION IS UPDATED] ===== -->
       <header class="page-container" style="padding-bottom: 0">
         <p>
           Hello, <span id="user-name"></span>!
           <a href="#" id="logout-btn" style="margin-left: 1em">(Sign Out)</a>
-          <a href="/onboarding" id="change-style-link" style="margin-left: 1em"
-            >(Change Learning Style)</a
-          >
+        </p>
+        <!-- The old "(Change Learning Style)" link was removed from the line above. -->
+        <!-- The following block is new. -->
+        <p style="font-size: 0.9em; color: #6b7280; margin-top: -0.5em">
+          Your learning style is set to: <b id="current-learning-style">...</b>
+          <a href="/onboarding" style="margin-left: 0.5em">(Change)</a>
         </p>
       </header>
+      <!-- ============================================= -->
 
-      <!-- Library / Topics -->
       <main id="lesson-library-view" class="page-container">
         <!-- Controls injected immediately for convenience -->
         <div class="library-controls" style="margin-bottom: 1em">
@@ -2796,9 +2802,6 @@ input[type="checkbox"] {
           </button>
           <button id="library-flashcards-btn" class="btn-outline">
             Generate Flashcards
-          </button>
-          <button id="final-quiz-button" class="btn-outline">
-            Take a Final Quiz
           </button>
         </div>
 
@@ -2835,7 +2838,7 @@ input[type="checkbox"] {
       ></main>
     </div>
 
-    <!-- ───── FLOATING AI-TUTOR CHAT ──────────────────────────────────── -->
+    <!-- ───── 3. FLOATING AI-TUTOR CHAT ──────────────────────────────────── -->
     <button id="tutor-button" style="display: none" onclick="toggleTutor()">
       Ask Tutor 💬
     </button>
@@ -2852,7 +2855,7 @@ input[type="checkbox"] {
       </div>
     </div>
 
-    <!-- ───── FINAL-QUIZ TOPIC-PICKER MODAL ───────────────────────────── -->
+    <!-- ───── 4. FINAL-QUIZ TOPIC-PICKER MODAL ───────────────────────────── -->
     <div id="final-quiz-modal" class="modal-backdrop">
       <div class="modal-content">
         <h2>Create a Cumulative Quiz</h2>
@@ -2899,7 +2902,7 @@ input[type="checkbox"] {
       </div>
     </div>
 
-    <!-- ───── FLASHCARD TOPIC-PICKER MODAL ────────────────────────── -->
+    <!-- ───── 5. FLASHCARD TOPIC-PICKER MODAL ────────────────────────── -->
     <div id="flashcard-topic-modal" class="modal-backdrop">
       <div class="modal-content">
         <h2>Generate Flashcards</h2>
@@ -2936,7 +2939,7 @@ input[type="checkbox"] {
       </div>
     </div>
 
-    <!-- ───── APP SCRIPTS ─────────────────────────────────────────────── -->
+    <!-- ───── 6. APP SCRIPTS ─────────────────────────────────────────────── -->
     <!-- All interactive logic now lives in static/js/main.js -->
     <script
       type="module"
@@ -2948,46 +2951,59 @@ input[type="checkbox"] {
 
 --- templates/onboarding.html ---
 <!-- FILE: templates/onboarding.html -->
-
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Welcome to Paramigo</title>
+    <title>Your Learning Style</title>
+
+    <!-- A single, clean style block -->
     <style>
       body {
-        font-family: sans-serif;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
         display: flex;
         justify-content: center;
-        align-items: center;
+        align-items: flex-start;
         min-height: 100vh;
         margin: 0;
         background-color: #f4f4f9;
         color: #333;
+        padding: 2em 0;
       }
       .container {
+        width: 90%;
         max-width: 800px;
         text-align: center;
         padding: 2em;
+        background: #fff;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
       }
       h1 {
         color: #0056b3;
       }
       .style-options {
         display: flex;
+        flex-wrap: wrap;
         gap: 1em;
         margin-top: 2em;
         text-align: left;
       }
       .style-box {
         flex: 1;
+        min-width: 200px;
         padding: 1.5em;
-        background-color: #fff;
-        border: 1px solid #ddd;
+        border: 2px solid #ddd;
         border-radius: 8px;
+        cursor: pointer;
+        transition: border-color 0.2s, box-shadow 0.2s;
         display: flex;
         flex-direction: column;
+      }
+      .style-box:hover {
+        border-color: #007bff;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
       }
       .style-box h3 {
         margin-top: 0;
@@ -2997,65 +3013,91 @@ input[type="checkbox"] {
         flex-grow: 1;
       }
       .custom-option {
-        margin-top: 2em;
+        margin-top: 2.5em;
+        text-align: left;
       }
       textarea {
         width: 100%;
-        padding: 0.5em;
+        padding: 0.75em;
         border-radius: 5px;
         border: 1px solid #ccc;
-        min-height: 60px;
+        min-height: 80px;
         box-sizing: border-box;
+        font-size: 1rem;
+        line-height: 1.5;
+      }
+      .main-actions {
+        margin-top: 1.5em;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 1em;
       }
       button {
         background-color: #007bff;
         color: white;
-        padding: 10px 15px;
+        padding: 12px 20px;
         border: none;
         border-radius: 5px;
         cursor: pointer;
-        margin-top: 1em;
+        font-size: 1rem;
+        transition: background-color 0.2s;
       }
       button:hover {
         background-color: #0056b3;
       }
+      button:disabled {
+        background-color: #aaa;
+        cursor: not-allowed;
+      }
+      a.back-link {
+        color: #6c757d;
+        text-decoration: none;
+      }
     </style>
   </head>
+
   <body>
+    <!-- A single, clean body structure -->
     <div class="container">
-      <h1>Let's Personalize Your Learning</h1>
+      <h1>Update Your Learning Style</h1>
       <p>
-        To help us tailor the content for you, please read the three
-        explanations of "compound interest" below.
-      </p>
-      <p>
-        <strong>Which one makes the most sense to you?</strong>
+        Your current learning style is shown in the text box below. You can edit
+        it directly, or click one of the presets to use it as a starting point.
       </p>
 
+      <!-- The style boxes now act as buttons to populate the text area -->
       <div class="style-options">
         {% for style in styles %}
-        <div class="style-box">
+        <div class="style-box" onclick="selectPreset('{{ style.style_name }}')">
           <h3>{{ style.style_name }}</h3>
           <p>{{ style.explanation }}</p>
-          <button onclick="savePreference('{{ style.style_name }}')">
-            I like this style
-          </button>
         </div>
         {% endfor %}
       </div>
 
+      <!-- This is now the main editor for the learning style -->
       <div class="custom-option">
-        <p>Or, describe the style you prefer in your own words:</p>
+        <label for="custom-style-input"
+          ><strong>Your Learning Style:</strong></label
+        >
         <textarea
           id="custom-style-input"
-          placeholder="e.g., 'Explain it to me like I'm five' or 'Give me only the bullet points'"
+          placeholder="Loading your style..."
         ></textarea>
-        <button onclick="saveCustomPreference()">Save My Preference</button>
+      </div>
+
+      <!-- A single, clear action bar -->
+      <div class="main-actions">
+        <a href="/" class="back-link">← Go Back Without Saving</a>
+        <button onclick="saveAndExit()">Save & Return to App</button>
       </div>
     </div>
 
+    <!-- A single, consolidated script block -->
     <script type="module">
-      // Import only what we need for this page
+      // Import Firebase tools
       import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
       import {
         getAuth,
@@ -3077,52 +3119,82 @@ input[type="checkbox"] {
       const auth = getAuth(app);
 
       let currentUser = null;
+      const customStyleInput = document.getElementById("custom-style-input");
+      const saveButton = document.querySelector(".main-actions button");
 
-      // We need to know who the current user is to save their preference
+      // Fetches the user's current style and populates the text box
+      async function loadCurrentUserStyle() {
+        if (!currentUser) return;
+
+        try {
+          const response = await fetch("/get_user_profile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id: currentUser.uid }),
+          });
+          if (!response.ok) throw new Error("Failed to fetch profile");
+
+          const profile = await response.json();
+          const currentStyle = profile.learningStyle || "";
+          customStyleInput.value = currentStyle;
+        } catch (error) {
+          console.error("Error loading user style:", error);
+          customStyleInput.value =
+            "Could not load your style. Please enter it here.";
+        }
+      }
+
+      // Runs when a user clicks one of the three preset boxes
+      window.selectPreset = function (styleName) {
+        customStyleInput.value = styleName;
+      };
+
+      // The one and only save function for this page
+      window.saveAndExit = async function () {
+        if (!currentUser) {
+          alert("Error: Not signed in.");
+          return;
+        }
+
+        const newStyle = customStyleInput.value.trim();
+        if (!newStyle) {
+          alert("Please enter a description of your preferred style.");
+          return;
+        }
+
+        // Disable button to prevent double-clicks
+        saveButton.disabled = true;
+        saveButton.textContent = "Saving...";
+
+        try {
+          await fetch("/save_preference", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              uid: currentUser.uid,
+              style: newStyle,
+            }),
+          });
+          // After saving, send them to the main app page
+          window.location.href = "/";
+        } catch (error) {
+          alert(`Error saving your style: ${error.message}`);
+          // Re-enable button on failure
+          saveButton.disabled = false;
+          saveButton.textContent = "Save & Return to App";
+        }
+      };
+
+      // When the page loads, check for auth status and then load the user's style
       onAuthStateChanged(auth, (user) => {
         if (user) {
           currentUser = user;
+          loadCurrentUserStyle();
         } else {
           // If for some reason they land here without being logged in, send them home.
           window.location.href = "/";
         }
       });
-
-      // This function will be called when the user clicks one of the three buttons
-      window.savePreference = async function (styleName) {
-        if (!currentUser) {
-          alert("Error: Not signed in.");
-          return;
-        }
-
-        await fetch("/save_preference", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            uid: currentUser.uid,
-            style: styleName,
-          }),
-        });
-
-        // After saving, send them to the main app page
-        window.location.href = "/";
-      };
-
-      // This function handles the custom text input
-      window.saveCustomPreference = async function () {
-        if (!currentUser) {
-          alert("Error: Not signed in.");
-          return;
-        }
-
-        const customStyle = document.getElementById("custom-style-input").value;
-        if (!customStyle.trim()) {
-          alert("Please enter a description of your preferred style.");
-          return;
-        }
-
-        await savePreference(customStyle); // We can reuse the same function
-      };
     </script>
   </body>
 </html>
