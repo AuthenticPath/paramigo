@@ -148,7 +148,7 @@ function showView(name) {
     name === "lesson" || name === "results" ? "block" : "none";
   window.scrollTo(0, 0);
 }
-window.showView = showView;
+window.showView = showView; // Expose to global scope
 
 /* ───── 5. LIBRARY & DASHBOARD RENDERING ─────────────────────────────── */
 async function initializeAppForUser(user) {
@@ -245,6 +245,42 @@ async function initializeAppForUser(user) {
 
   showView("library");
 }
+
+/* ── Topic detail ───────────────── */
+function showTopicDetail(topicId) {
+  currentLessonId = topicId;
+  const topic = libraryData.find((t) => t.id === topicId);
+  if (!topic) return;
+
+  const history = topic.attempts
+    .map(
+      (a) => `<li class="attempt-item" onclick="reviewLesson('${
+        a.attempt_id
+      }')">
+               <strong>${a.title}</strong><br>
+               Score: ${
+                 a.score !== null
+                   ? `${a.score}/${a.questions_total}`
+                   : "In Progress"
+               }<br>
+               <small>${new Date(a.started_at).toLocaleString()}</small>
+             </li>`
+    )
+    .join("");
+
+  views.topicDetail.innerHTML = `
+    <button onclick="showView('library')">← Back to Library</button>
+    <h2 style="margin-top:1em">${topic.title}</h2>
+    <button class="btn-primary" onclick="startLesson('${
+      topic.id
+    }')">Start New Attempt</button>
+    <hr style="margin:2em 0">
+    <h3>Your Previous Attempts</h3>
+    ${history || "<p>You have no history for this topic yet.</p>"}  
+  `;
+  showView("topicDetail");
+}
+window.showTopicDetail = showTopicDetail;
 
 /* ───── 6.  LESSON FLOW ──────────────────────────────────────────────── */
 async function startLesson(lessonId, originalAttemptId = null) {
@@ -353,7 +389,6 @@ async function submitQuiz() {
 }
 window.submitQuiz = submitQuiz;
 
-/* Render quiz RESULTS with Source Material Accordion */
 /* Render quiz RESULTS with Source Material Accordion */
 async function renderResultsView(data, attemptId) {
   const {
@@ -706,6 +741,8 @@ function renderFinalQuizView(questions) {
     </form>
     <button class="back-to-library" onclick="showView('library')" style="margin-top:1em;background:#6c757d">Cancel</button>`;
 }
+window.renderFinalQuizView = renderFinalQuizView;
+
 async function submitFinalQuiz() {
   const ans = Object.fromEntries(new FormData($("#final-quiz-form")).entries());
   views.finalQuiz.innerHTML = "<h2>Scoring…</h2>";
@@ -721,6 +758,8 @@ async function submitFinalQuiz() {
     views.finalQuiz.innerHTML = `<h2>Error</h2><p>${e.message}</p>`;
   }
 }
+window.submitFinalQuiz = submitFinalQuiz;
+
 function renderFinalQuizResults(data) {
   const { quiz_questions, user_answers, score, questions_total, title } = data;
   let html = `<h2>Final Quiz Results: ${title}</h2>
@@ -753,9 +792,6 @@ function renderFinalQuizResults(data) {
   html += `<button class="back-to-library" onclick="showView('library')" style="margin-top:2em">← Back to Library</button>`;
   views.finalQuiz.innerHTML = html;
 }
-window.renderFinalQuizView = renderFinalQuizView;
-
-// ** OMISSION FIXED: This function was missing in the previous response **
 async function reviewFinalQuiz(attemptId) {
   views.finalQuiz.innerHTML = "<h2>Loading Past Results...</h2>";
   showView("finalQuiz");
@@ -800,10 +836,6 @@ $("#create-topic-btn").onclick = async () => {
     currentLessonId = data.lesson_id;
     currentLessonContext = data.content;
 
-    // --- THIS IS THE FIX ---
-    // Manually add the new topic to our local libraryData array.
-    // This makes the "Cancel and Go Back" button work immediately without
-    // needing to re-fetch the entire library from the server.
     libraryData.push({
       id: data.lesson_id,
       title: title,
@@ -832,12 +864,10 @@ function showFlashcardTopicModal() {
   flashcardTopicModal.style.display = "flex";
 }
 
-// This new function hides the modal
 function hideFlashcardTopicModal() {
   flashcardTopicModal.style.display = "none";
 }
 
-// This new function runs when the user clicks "Generate Flashcards" INSIDE the modal
 async function generateFlashcardsFromModal() {
   const selectedIds = Array.from(
     $$('input[name="flashcard-topic"]:checked')
@@ -850,12 +880,7 @@ async function generateFlashcardsFromModal() {
   await genFlashcardsTopics(selectedIds); // Call the existing generation function
 }
 
-// --- Event Listeners to wire everything up ---
-
-// The main library button now calls the function to SHOW the modal
 $("#library-flashcards-btn").onclick = showFlashcardTopicModal;
-
-// The buttons inside the modal are now wired up
 generateFlashcardsBtnModal.addEventListener(
   "click",
   generateFlashcardsFromModal
@@ -866,6 +891,7 @@ selectAllFlashcardTopicsCheckbox.addEventListener("change", (e) => {
     (c) => (c.checked = e.target.checked)
   );
 });
+
 /* ───── 12.  AI-TUTOR CHAT (unchanged) ────────────────────────────────── */
 function toggleTutor() {
   const hidden =
